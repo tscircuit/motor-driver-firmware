@@ -10,7 +10,7 @@ Motion must be requested explicitly after boot, reconnect, stop or fault. Browse
 
 Use an unloaded secured motor for initial use. Keep the tab visible while running. Stop releases holding torque. Motor motion is never started by visiting the public site; Web Serial requires the visitor to choose their own attached device. No remote-control server or telemetry upload exists.
 
-Firmware source: firmware/main.py and firmware/tmp102.py. Temperature and buzzer settings remain active without the browser; motion does not.
+Firmware source: the four Python files in firmware/. Temperature and buzzer settings remain active without the browser; motion does not.
 
 Validation: JS syntax; live hardware telemetry; threshold validation and alarm behavior; four-step moves in both directions; invalid speed rejected; continuous motion stopped after missing heartbeat (8 commanded steps at 5 steps/sec); explicit Stop; motor-disabled boot. Eight half steps in each direction, quarter-resolution rejection, half-step continuous heartbeat timeout and explicit Stop passed on hardware. Eight-state sequence, reverse traversal, bridge input states and unchanged full-step sequence passed code checks. Browser UI and live telemetry preview previously verified. Optional WebMCP read-tool execution was unavailable.
 
@@ -30,15 +30,17 @@ Designed for the [RP2040 motor controller](https://tscircuit.com/imrishabh18/rp2
 | I2C1 SDA / SCL | 26 / 27 |
 | Buzzer | 16 |
 
-Install MicroPython on the RP2040 first. Disconnect the dashboard's serial connection and remove motor power before updating firmware. Install `mpremote` on your computer, then upload the two firmware files to the board's filesystem root (replace `PORT` with its serial device):
+Install MicroPython on the RP2040 first. Disconnect the dashboard's serial connection and remove motor power before updating firmware. Install `mpremote` on your computer, then upload all four firmware files to the board's filesystem root (replace `PORT` with its serial device):
 
 ```sh
 python3 -m pip install mpremote
+mpremote connect PORT fs cp firmware/device_config.py :device_config.py
 mpremote connect PORT fs cp firmware/tmp102.py :tmp102.py
 mpremote connect PORT fs cp firmware/main.py :main.py
+mpremote connect PORT fs cp firmware/boot.py :boot.py
 ```
 
-Press RUN/reset to start the firmware. An existing firmware watchdog can interrupt file transfers; if it does, disable that watchdog by starting from a fresh MicroPython installation before copying. Erasing the board filesystem also removes saved settings. Keep motor power disconnected until both files are installed.
+Press RUN/reset to start the firmware. An existing firmware watchdog can interrupt file transfers; if it does, disable that watchdog by starting from a fresh MicroPython installation before copying. Erasing the board filesystem also removes saved settings. Keep motor power disconnected until all four files are installed.
 
 The default buzzer threshold is 65°C. Changes made in the dashboard persist in `alarm.json` on the board; that device-specific file is not part of this repository.
 
@@ -51,3 +53,14 @@ python3 -m http.server 8000 --directory dist
 ```
 
 Open `http://localhost:8000` in desktop Chrome or Edge. Web Serial requires a secure context (HTTPS or localhost). The dashboard communicates directly with the connected board using newline-delimited JSON, protocol version 3, at 115200 baud.
+
+
+## Rename the USB device
+
+Connect the board, stop the motor, and enter a **USB device name** in the dashboard's Device identity panel. Choose **Save name & restart**, then reconnect and select the new name. Names accept 1–32 printable ASCII characters; leading/trailing spaces are removed. The name is stored in `device.json` on the board, independently of the alarm threshold.
+
+`boot.py` applies the USB product and CDC interface strings before enumeration using MicroPython's [`machine.USBDevice`](https://docs.micropython.org/en/v1.29.0/library/machine.USBDevice.html) API. The default name is **Motor bench**. VID/PID and the hardware serial number stay unchanged, preserving device identity and compatibility. OS/browser label caches may require unplugging and reconnecting the programming USB cable. The RP2040 BOOTSEL bootloader name is not changed.
+
+All four firmware files are required, followed by a hardware reset. The dashboard disables renaming when firmware lacks boot-time USB naming support. The serial command is `{"cmd":"set_device_name","id":1,"name":"Left motor"}`; a successful acknowledgement precedes a deferred hardware reset. Renaming is rejected during motion, and motion is rejected while reset is pending. No movement resumes automatically. Telemetry includes `device_name`, `usb_name`, `usb_name_supported`, `usb_name_error`, `device_id`, and `restarting` while keeping protocol version 3 backward-compatible.
+
+Host-side validation: `python3 -m unittest discover -s tests -v` and `node tests/test_dashboard.cjs` (plus `node --check dist/app.js`).

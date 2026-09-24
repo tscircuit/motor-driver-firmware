@@ -2,6 +2,9 @@
 from machine import Pin, I2C, PWM, WDT
 from time import ticks_ms, ticks_diff, ticks_add, sleep_ms
 import sys, select, json, os, math
+import machine, device_config
+device_name=device_config.load_name()
+reset_at=None
 
 led=Pin(25,Pin.OUT,value=0)
 enable=Pin(22,Pin.OUT,value=0)
@@ -51,6 +54,9 @@ def led_value(now,alarm_active,moving):
 def emit(data):print(json.dumps(data))
 def status():
     return {'type':'telemetry','protocol':3,'uptime_ms':ticks_ms(),'temperature_c':temperature,
+      'device_name':device_name,'usb_name':device_config.usb_name,
+      'usb_name_supported':device_config.usb_name is not None,'usb_name_error':device_config.usb_name_error,
+      'device_id':machine.unique_id().hex(),'restarting':reset_at is not None,
       'led_on':bool(led.value()),'led_mode':'alarm' if alarm else 'running' if mode!='stopped' else 'off',
       'threshold_c':threshold,'alarm_active':alarm,'buzzer_on':sounding,'sensor_error':sensor_error,
       'thermal_alert':not bool(alert.value()),'driver_fault_asserted':not bool(fault.value()),
@@ -65,7 +71,7 @@ def number(value,low,high):
     return value
 
 def handle(line):
-    global threshold,test_until,last_heartbeat,mode,direction,speed,remaining,executed,next_step,stop_reason,resolution
+    global threshold,test_until,last_heartbeat,mode,direction,speed,remaining,executed,next_step,stop_reason,resolution,device_name,reset_at
     ident=None
     try:
         cmd=json.loads(line)
@@ -81,8 +87,16 @@ def handle(line):
             value=number(cmd.get('threshold_c'),10,74)
             with open('alarm.tmp','w') as f:json.dump({'threshold_c':float(value)},f)
             os.rename('alarm.tmp','alarm.json');threshold=float(value)
+        elif op=='set_device_name':
+            if mode!='stopped':raise ValueError('Stop motor before renaming')
+            if device_config.usb_name is None:raise ValueError('USB naming unavailable; install boot.py and device_config.py, then reset')
+            if reset_at is not None:raise ValueError('Restart already pending')
+            device_name=device_config.save_name(cmd.get('name'))
+            stop('Restarting to apply USB name')
+            reset_at=ticks_add(ticks_ms(),750)
         elif op=='beep':test_until=ticks_add(ticks_ms(),600)
         elif op=='start':
+            if reset_at is not None:raise ValueError('Restart pending')
             if mode!='stopped':raise ValueError('Stop current movement first')
             new_resolution=cmd.get('resolution','full')
             if new_resolution not in ('full','half'):raise ValueError('Only full and half steps supported; quarter stepping requires controlled intermediate coil currents')
@@ -105,7 +119,7 @@ def handle(line):
             resolution=new_resolution;direction=new_direction;speed=new_speed;remaining=int(count);executed=0
             mode=requested;stop_reason='';next_step=ticks_ms()
         else:raise ValueError('Unknown command')
-        emit({'type':'ack','id':ident,'ok':True,'threshold_c':threshold})
+        emit({'type':'ack','id':ident,'ok':True,'threshold_c':threshold,'device_name':device_name,'restarting':reset_at is not None})
     except Exception as e:
         emit({'type':'ack','id':ident,'ok':False,'error':str(e)})
 
@@ -142,6 +156,9 @@ try:
         buzzer.duty_u16(32768 if sounding else 0)
         led.value(led_value(now,alarm,mode!='stopped'))
         watchdog.feed()
+        if reset_at is not None and ticks_diff(now,reset_at)>=0:
+            stop('Restarting to apply USB name');buzzer.duty_u16(0);led.value(0)
+            machine.reset()
         if ticks_diff(now,last_emit)>=250:
             emit(status());last_emit=now
         sleep_ms(1)
