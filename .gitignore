@@ -5,3 +5,4 @@ __pycache__/
 alarm.json
 device.json
 *.tmp
+build/

@@ -1,66 +1,96 @@
 # Motor driver firmware
 
-Public dashboard: https://seve-motor-temperature.seveibarts.chatgpt.site
+MicroPython motor-control firmware with a Web Serial dashboard. Motion and safety logic are separated from driver chips, board wiring, and MCU services so additional hardware can reuse the controller and protocol.
 
-Open in desktop Chrome or Edge, connect the programming USB port, click Connect board, and select MicroPython / Board in FS mode. Only one serial client can own the port.
+[Public dashboard](https://seve-motor-temperature.seveibarts.chatgpt.site) · [Porting guide](docs/architecture.md) · [Serial protocol](docs/protocol.md)
 
-Features: live five-minute temperature graph; 600 ms buzzer test; persistent buzzer threshold (10–74 C); continuous or finite-step motion; left/right; 5–100 selected steps per second; Stop. Choose full (1.8 degrees, 200/revolution) or half (0.9 degrees, 400/revolution) for the 17HE15-1504S. Counts and speed use the selected increment. Quarter stepping is unavailable on this PCB: no adjustable intermediate winding-current reference or current feedback reaches the MCU. Firmware rejects unsupported resolutions. Half stepping alternates one/two coils without current normalization; torque ripple and additional heating are possible. Counts are commanded rather than encoder-measured; initial alignment and missed steps affect actual position. Current is unavailable because this PCB has no MCU current measurement path.
+## Supported hardware
 
-Motion must be requested explicitly after boot, reconnect, stop or fault. Browser sends heartbeats every 400 ms only while visible. Firmware releases coils after 1.5 seconds without heartbeat; hiding the page or disconnecting also sends Stop. Driver fault, invalid temperature, hardware ALERT, or 75 C temperature stops motion. A start requires a valid temperature below 60 C. A 2-second watchdog resets into motor-disabled startup if firmware stalls. This board's nominal hardware current trip is about 1 A; it is not a measured value or validated continuous thermal rating.
+The included hardware profile is **RP2040 / DRV8847**, for the [tscircuit RP2040 motor controller](https://tscircuit.com/imrishabh18/rp2040-motor-controller#files), with a TMP102 temperature sensor and a StepperOnline 17HE15-1504S motor (200 full steps/revolution).
 
-Use an unloaded secured motor for initial use. Keep the tab visible while running. Stop releases holding torque. Motor motion is never started by visiting the public site; Web Serial requires the visitor to choose their own attached device. No remote-control server or telemetry upload exists.
+The original firmware was exercised on this board with MicroPython 1.29.0. The modular refactor is covered by host-side regression tests, including a simulated second driver/platform; it has not yet been flashed and validated on hardware. Other driver chips and MCUs need an adapter/profile and hardware validation. The host simulator is a test double, not a supported physical driver.
 
-Firmware source: the four Python files in firmware/. Temperature and buzzer settings remain active without the browser; motion does not.
+Features include continuous or finite-step motion, direction and speed controls, full and half stepping on the DRV8847, temperature history, persistent buzzer threshold, a test tone, USB device naming, and status LED patterns. The dashboard reads driver resolutions, motor geometry, safety limits, and current availability from telemetry. It can select serial devices with other USB identifiers and retains compatibility with older protocol-3 firmware.
 
-Validation: JS syntax; live hardware telemetry; threshold validation and alarm behavior; four-step moves in both directions; invalid speed rejected; continuous motion stopped after missing heartbeat (8 commanded steps at 5 steps/sec); explicit Stop; motor-disabled boot. Eight half steps in each direction, quarter-resolution rejection, half-step continuous heartbeat timeout and explicit Stop passed on hardware. Eight-state sequence, reverse traversal, bridge input states and unchanged full-step sequence passed code checks. Browser UI and live telemetry preview previously verified. Optional WebMCP read-tool execution was unavailable.
+## Repository layout
 
-User LED on GPIO25: off while idle, 1 Hz during motion, 4 Hz while the temperature/sensor alarm is active. Alarm takes priority over motion. Manual test tone alone does not activate the alarm LED. Timing logic verified; live GPIO telemetry toggled during a six-half-step move and a temporary temperature alarm; original threshold restored and motor left stopped. Optical LED brightness was not measured.
+```text
+firmware/
+  boot.py                    Safe outputs and optional USB identity
+  main.py                    Small application entrypoint
+  board_config.py            Selected board composition
+  boards/rp2040_drv8847.py    Wiring, limits, sensor/driver/platform assembly
+  core/controller.py         Motion, safety, commands, telemetry, LED/alarm policy
+  core/runtime.py            Cooperative event loop and watchdog handling
+  core/settings.py           Persistent alarm settings
+  device_config.py           Persistent device name and validation
+  drivers/drv8847.py          Chip-specific bridge sequence and wake/fault behavior
+  sensors/tmp102.py          I2C sensor protocol and configuration verification
+  platforms/micropython.py    Pins, I2C, PWM, clock, watchdog, serial, reset, unique ID
+  platforms/usb_identity.py   Optional MicroPython USB descriptor customization
+dist/                        Buildless Web Serial dashboard
+scripts/build_firmware.py    Stage a complete firmware tree for one board
+tests/                      Host-only controller, driver, USB/settings and UI tests
+```
 
+See the [porting guide](docs/architecture.md) for interfaces and the steps to add hardware. The reusable controller imports neither `machine` nor a concrete board/driver. It also runs on CPython with fake adapters.
 
-## Hardware and installation
+## Install firmware
 
-Designed for the [RP2040 motor controller](https://tscircuit.com/imrishabh18/rp2040-motor-controller#files) with a DRV8847 driver and TMP102 sensor. Tested with MicroPython 1.29.0 and a StepperOnline 17HE15-1504S motor.
+Install a suitable MicroPython build on the board first. Disconnect the dashboard and remove motor power for firmware maintenance. Install `mpremote` on your computer, then stage a fresh output directory:
+
+```sh
+python3 -m pip install mpremote
+python3 scripts/build_firmware.py --board rp2040_drv8847
+```
+
+Copy **the entire staged directory contents** to the board filesystem root, keeping the subdirectories. Replace `PORT` with the programming serial port:
+
+```sh
+cd build/firmware
+mpremote connect PORT fs cp -r core drivers sensors platforms boards : + fs cp device_config.py board_config.py main.py boot.py :
+```
+
+Press RUN/reset after the copy finishes. Runtime USB naming can cause an `mpremote` soft reset to disconnect the port; reconnect and retry if this happens. Do not resume motor use until all files have uploaded successfully. A running watchdog may interrupt a slow update: use a maintenance MicroPython boot without the application/watchdog before retrying. Never bypass protection in the production profile.
+
+The staging command refuses a nonempty output directory to avoid mixing versions. Use a fresh `--output` directory for subsequent builds. Device files `alarm.json` and `device.json` are not included or overwritten; settings survive an ordinary upload. Legacy top-level `tmp102.py` from earlier versions is unused and may remain on the board. Do not upload only the old four-file layout.
+
+For a new board, add its composition module and select it with `--board`; do not scatter pin changes through the controller. The checked-in `board_config.py` selects the RP2040/DRV8847 profile for source-tree installs.
+
+## Current board wiring and limits
 
 | Signal | RP2040 GPIO |
 | --- | --- |
-| Driver inputs A1 / A2 / B1 / B2 | 18 / 19 / 20 / 21 |
+| DRV8847 A1 / A2 / B1 / B2 | 18 / 19 / 20 / 21 |
 | Motor enable | 22 |
 | Driver nFAULT / TMP102 ALERT | 23 / 24 |
 | User LED | 25 |
 | I2C1 SDA / SCL | 26 / 27 |
 | Buzzer | 16 |
 
-Install MicroPython on the RP2040 first. Disconnect the dashboard's serial connection and remove motor power before updating firmware. Install `mpremote` on your computer, then upload all four firmware files to the board's filesystem root (replace `PORT` with its serial device):
+The DRV8847 profile allows 5–100 selected steps/sec and up to 100,000 steps per move. Full steps are 1.8°; half steps are 0.9°. Quarter steps require controllable intermediate winding currents and are not supported on this PCB. Half stepping alternates one/two energized coils without current normalization, so torque ripple and additional heating are possible. Step counts are commanded, not encoder measurements; alignment and missed steps affect actual position.
+
+There is no MCU measurement path for current or motor supply voltage on this board. The nominal hardware current trip is about 1 A; this is neither a measured current nor a validated continuous thermal rating. The encoder may remain disconnected.
+
+Motion requires an explicit start and a recent browser heartbeat. Coils release after 1.5 seconds without a heartbeat, on driver/thermal faults, on invalid temperature, or at 75°C. Starting requires a valid temperature below 60°C. A 2-second watchdog resets into disabled startup if firmware stalls. No motion resumes after reset, reconnect, stop, or fault. Stop releases holding torque. Use a secured unloaded motor for initial checks.
+
+The alarm defaults to 65°C and accepts 10–74°C, with 2°C hysteresis. It persists in `alarm.json` and runs without the browser. The LED is off when idle, blinks at 1 Hz during motion, and at 4 Hz during a temperature/sensor alarm; the alarm takes priority. Manual test tones alone do not activate the alarm LED.
+
+## USB device naming
+
+In the dashboard, stop the motor, enter a **USB device name**, and choose **Save name & restart**. Reconnect and select the new name. Names accept 1–32 printable ASCII characters; surrounding spaces are removed. The name persists in `device.json` independently of the alarm threshold.
+
+USB naming is a platform capability, not a requirement for motion control. The supplied MicroPython adapter uses [`machine.USBDevice`](https://docs.micropython.org/en/v1.29.0/library/machine.USBDevice.html) when available. It changes product/CDC labels while preserving VID/PID and hardware serial number. It does not change the BOOTSEL bootloader name. Some OS/browser caches require unplugging and reconnecting the programming cable. The dashboard disables renaming if the platform cannot apply it.
+
+## Run and test locally
 
 ```sh
-python3 -m pip install mpremote
-mpremote connect PORT fs cp firmware/device_config.py :device_config.py
-mpremote connect PORT fs cp firmware/tmp102.py :tmp102.py
-mpremote connect PORT fs cp firmware/main.py :main.py
-mpremote connect PORT fs cp firmware/boot.py :boot.py
-```
-
-Press RUN/reset to start the firmware. An existing firmware watchdog can interrupt file transfers; if it does, disable that watchdog by starting from a fresh MicroPython installation before copying. Erasing the board filesystem also removes saved settings. Keep motor power disconnected until all four files are installed.
-
-The default buzzer threshold is 65°C. Changes made in the dashboard persist in `alarm.json` on the board; that device-specific file is not part of this repository.
-
-## Run the dashboard locally
-
-No frontend build or dependencies are required:
-
-```sh
+python3 -m unittest discover -s tests -v
+node --check dist/app.js
+node tests/test_dashboard.cjs
 python3 -m http.server 8000 --directory dist
 ```
 
-Open `http://localhost:8000` in desktop Chrome or Edge. Web Serial requires a secure context (HTTPS or localhost). The dashboard communicates directly with the connected board using newline-delimited JSON, protocol version 3, at 115200 baud.
+Open `http://localhost:8000` in desktop Chrome or Edge. Web Serial needs HTTPS or localhost, and only one client can own the port. The site talks directly to the selected board at 115200 baud; it has no remote-control server or telemetry upload. Keep the page visible while running; hiding it sends Stop. Visiting the public site does not start a motor.
 
-
-## Rename the USB device
-
-Connect the board, stop the motor, and enter a **USB device name** in the dashboard's Device identity panel. Choose **Save name & restart**, then reconnect and select the new name. Names accept 1–32 printable ASCII characters; leading/trailing spaces are removed. The name is stored in `device.json` on the board, independently of the alarm threshold.
-
-`boot.py` applies the USB product and CDC interface strings before enumeration using MicroPython's [`machine.USBDevice`](https://docs.micropython.org/en/v1.29.0/library/machine.USBDevice.html) API. The default name is **Motor bench**. VID/PID and the hardware serial number stay unchanged, preserving device identity and compatibility. OS/browser label caches may require unplugging and reconnecting the programming USB cable. The RP2040 BOOTSEL bootloader name is not changed.
-
-All four firmware files are required, followed by a hardware reset. The dashboard disables renaming when firmware lacks boot-time USB naming support. The serial command is `{"cmd":"set_device_name","id":1,"name":"Left motor"}`; a successful acknowledgement precedes a deferred hardware reset. Renaming is rejected during motion, and motion is rejected while reset is pending. No movement resumes automatically. Telemetry includes `device_name`, `usb_name`, `usb_name_supported`, `usb_name_error`, `device_id`, and `restarting` while keeping protocol version 3 backward-compatible.
-
-Host-side validation: `python3 -m unittest discover -s tests -v` and `node tests/test_dashboard.cjs` (plus `node --check dist/app.js`).
+CI runs host tests, JavaScript checks, and firmware staging. Host tests exercise forward/reverse coil sequences, finite motion, heartbeat expiry across clock wrap, sensor/thermal/driver failures, malformed commands, saved settings, USB rename/restart, output cleanup, and an unrelated simulated driver that advertises quarter steps. Physical validation is still required for any new adapter or board.

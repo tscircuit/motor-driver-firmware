@@ -1,6 +1,9 @@
 'use strict';
 const $=id=>document.getElementById(id);
 let port=null,reader=null,reading=null,connecting=false,closing=false,last=null,lastSeen=0,nextId=1;
+let capabilityKey='';
+const defaults={resolutions:{full:1,half:2},full_steps_per_revolution:200,min_speed_sps:5,max_speed_sps:100,max_steps:100000,threshold_min_c:10,threshold_max_c:74,shutdown_c:75,heartbeat_timeout_ms:1500,buzzer_hz:2731};
+const caps=()=>({...defaults,...(last?.capabilities||{})});
 let nameDirty=false,renaming=false,restartNotice=null;
 let points=[],pending=new Map(),dirty=false,writeChain=Promise.resolve();
 const message=t=>{$('message').textContent=t;};
@@ -19,13 +22,13 @@ function receive(line){
  let data;try{data=JSON.parse(line);}catch{return;}
  if(data.type==='ack'){const p=pending.get(data.id);if(p){clearTimeout(p.timer);pending.delete(data.id);data.ok?p.resolve(data):p.reject(Error(data.error||'Command rejected'));}return;}
  if(data.type!=='telemetry'||![1,2,3].includes(data.protocol))return;
- if(!Number.isFinite(data.threshold_c)||data.threshold_c<10||data.threshold_c>74)return;
- const t=data.temperature_c;if(t!==null&&(!Number.isFinite(t)||t< -40||t>125))return;
+ if(!Number.isFinite(data.threshold_c))return;
+ const t=data.temperature_c;if(t!==null&&!Number.isFinite(t))return;
  const now=Date.now();if(lastSeen&&now-lastSeen>2500)points.push({t:now-1,v:null});
- last=data;lastSeen=now;
+ last=data;lastSeen=now;updateCapabilities();
  $('deviceIdentity').textContent=`${data.device_name||'MicroPython board'}${data.device_id?' · '+data.device_id:''}`;
  if(!nameDirty)$('deviceName').value=data.device_name||'';
- $('nameHint').textContent=data.usb_name_supported?'Saved on the board. Stop the motor first. After restart, reconnect using the new name.':'Install the updated firmware, including boot.py, to enable USB naming.';
+ $('nameHint').textContent=data.usb_name_supported?'Saved on the board. Stop the motor first. After restart, reconnect using the new name.':'USB naming is unavailable on this platform or firmware installation.';
 points.push({t:now,v:t});points=points.filter(p=>p.t>=now-300000).slice(-1300);
  $('temperature').textContent=t===null?'—':t.toFixed(1);
  $('tempHint').textContent=data.sensor_error?'Sensor read failed': 'Live · 4 readings per second';
@@ -58,14 +61,14 @@ function draw(){
 async function readLoop(){let buffer='';const decoder=new TextDecoder();try{while(port&&reader){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let i;while((i=buffer.indexOf('\n'))>=0){receive(buffer.slice(0,i).trim());buffer=buffer.slice(i+1);}if(buffer.length>8192)buffer='';}}catch(e){if(!closing)message(restartNotice||('USB connection lost: '+e.message));}finally{reader?.releaseLock();reader=null;}}
 async function disconnect(){if(closing)return;closing=true;try{if(port&&[2,3].includes(last?.protocol)){try{await send('stop');}catch{}}if(reader)await reader.cancel();if(reading)await reading;await writeChain.catch(()=>{});if(port)await port.close();}catch{}finally{port=null;reading=null;lastSeen=0;closing=false;for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('Disconnected'));}pending.clear();$('state').textContent='Disconnected';$('connectionHint').textContent='Graph retained. Reconnect to resume live readings.';$('tempHint').textContent='Last reading · disconnected';$('motionState').textContent='Disconnected · automatic stop';$('motorStatus').textContent='Disconnected';controls();}}
 async function connect(){if(port)return disconnect();connecting=true;controls();try{
- const selected=await navigator.serial.requestPort({filters:[{usbVendorId:0x2e8a,usbProductId:0x0005}]});
+ const selected=await navigator.serial.requestPort();
  await selected.open({baudRate:115200});port=selected;lastSeen=0;last=null;points=[];dirty=false;nameDirty=false;renaming=false;restartNotice=null;
  await port.setSignals({dataTerminalReady:true,requestToSend:false});reader=port.readable.getReader();reading=readLoop();
  reading.then(()=>{if(!closing&&port)void disconnect();});
  $('state').textContent='Waiting for board';message('Connected. Waiting for telemetry…');
  await send('status');message('Live readings received. Settings and tones are acknowledged by the board.');
  }catch(e){message(e.name==='NotFoundError'?'No board selected.':e.message+' Close any other serial monitor and try again.');if(port)await disconnect();}finally{connecting=false;controls();}}
-async function applyThreshold(value){if(!Number.isFinite(value)||value<10||value>74)throw Error('Choose a threshold from 10 to 74°C.');const ack=await send('set_threshold',{threshold_c:value});dirty=false;$('threshold').value=ack.threshold_c;message(`Saved on board: buzzer at ${ack.threshold_c}°C.`);return {threshold_c:ack.threshold_c};}
+async function applyThreshold(value){const c=caps();if(!Number.isFinite(value)||value<c.threshold_min_c||value>c.threshold_max_c)throw Error(`Choose a threshold from ${c.threshold_min_c} to ${c.threshold_max_c}°C.`);const ack=await send('set_threshold',{threshold_c:value});dirty=false;$('threshold').value=ack.threshold_c;message(`Saved on board: buzzer at ${ack.threshold_c}°C.`);return {threshold_c:ack.threshold_c};}
 $('connect').addEventListener('click',()=>void connect());
 $('threshold').addEventListener('input',()=>{dirty=true;});
 $('thresholdForm').addEventListener('submit',async e=>{e.preventDefault();try{await applyThreshold(Number($('threshold').value));}catch(error){message(error.message);}});
@@ -80,12 +83,32 @@ if(context?.registerTool){try{Promise.resolve(context.registerTool({name:'read_m
 function heartbeat(){if(!port?.writable||document.hidden||closing||renaming)return;const target=port;writeChain=writeChain.catch(()=>{}).then(async()=>{if(!target.writable)return;const w=target.writable.getWriter();try{await w.write(new TextEncoder().encode('{"cmd":"heartbeat"}\n'));}finally{w.releaseLock();}}).catch(()=>{});}
 setInterval(heartbeat,400);
 $('mode').addEventListener('change',()=>{$('stepsField').hidden=$('mode').value==='continuous';$('steps').required=$('mode').value==='steps';});
-$('motionForm').addEventListener('submit',async e=>{e.preventDefault();const mode=$('mode').value;const speed=Number($('speed').value),steps=Number($('steps').value);if(!Number.isFinite(speed)||speed<5||speed>100||(mode==='steps'&&(!Number.isInteger(steps)||steps<1||steps>100000))){message('Use 5–100 steps/sec and 1–100,000 whole steps.');return;}try{heartbeat();await send('start',{mode,direction:Number($('direction').value),speed_sps:speed,steps,resolution:$('resolution').value});message('Movement started. Press Stop to release the motor.');}catch(error){message(error.message);try{await send('stop');}catch{}}});
+$('motionForm').addEventListener('submit',async e=>{e.preventDefault();const mode=$('mode').value;const c=caps(),speed=Number($('speed').value),steps=Number($('steps').value);if(!Number.isFinite(speed)||speed<c.min_speed_sps||speed>c.max_speed_sps||(mode==='steps'&&(!Number.isInteger(steps)||steps<1||steps>c.max_steps))){message(`Use ${c.min_speed_sps}–${c.max_speed_sps} steps/sec and 1–${c.max_steps} whole steps.`);return;}try{heartbeat();await send('start',{mode,direction:Number($('direction').value),speed_sps:speed,steps,resolution:$('resolution').value});message('Movement started. Press Stop to release the motor.');}catch(error){message(error.message);try{await send('stop');}catch{}}});
 $('stop').addEventListener('click',async()=>{try{await send('stop');message('Motor stopped and coils released.');}catch(error){message('Stop not acknowledged. Automatic stop follows if the connection is lost.');}});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&port)void send('stop').catch(()=>{});});
 window.addEventListener('pagehide',()=>{if(port)void send('stop').catch(()=>{});});
 
-function updateEstimate(){const half=$('resolution').value==='half',unit=half?'half':'full',perRev=half?400:200,n=Number($('steps').value),speed=Number($('speed').value);$('stepsLabel').textContent=half?'Half steps':'Full steps';$('speedLabel').textContent=half?'Half steps/sec':'Full steps/sec';$('moveEstimate').textContent=$('mode').value==='continuous'?`${perRev} ${unit} steps per revolution · ${(speed/perRev*60).toFixed(1)} nominal RPM`:`${n} ${unit} steps = ${(n/perRev*360).toFixed(1)}° · approximately ${(n/speed).toFixed(1)} seconds at ${speed} ${unit} steps/sec.`;}
+function updateCapabilities(){
+ const c=caps(),key=JSON.stringify(c);
+ $('boardLabel').textContent=last?.board||'MOTOR CONTROLLER';
+ const measured=last?.current_available&&Number.isFinite(last.current_a);
+ $('current').textContent=measured?`${last.current_a.toFixed(2)} A`:'Unavailable';
+ $('currentHint').textContent=measured?'Measured current':(c.current_note||'No current measurement connection to the MCU.');
+ if(key!==capabilityKey){
+  const selected=$('resolution').value;
+  $('resolution').replaceChildren(...Object.entries(c.resolutions).map(([name,factor])=>{const option=document.createElement('option');option.value=name;option.textContent=`${name} · ${(360/(c.full_steps_per_revolution*factor)).toFixed(2)}°`;return option;}));
+  $('resolution').value=Object.hasOwn(c.resolutions,selected)?selected:Object.keys(c.resolutions)[0];
+  $('speed').min=c.min_speed_sps;$('speed').max=c.max_speed_sps;$('steps').max=c.max_steps;
+  $('speed').value=Math.max(c.min_speed_sps,Math.min(Number($('speed').value)||40,c.max_speed_sps));
+  $('threshold').min=c.threshold_min_c;$('threshold').max=c.threshold_max_c;
+  $('shutdown').textContent=`${c.shutdown_c}°C · fixed`;
+  $('buzzerFrequency').textContent=`${c.buzzer_hz} Hz`;
+  $('stepNote').textContent=c.step_note||'Only step sizes supported by the connected board are listed.';
+  $('protectionHint').textContent=`The buzzer setting does not change thermal protection. Motion stops at ${c.shutdown_c}°C, on sensor or driver faults, or after ${c.heartbeat_timeout_ms/1000} seconds without a browser heartbeat.`;
+  capabilityKey=key;updateEstimate();
+ }
+}
+function updateEstimate(){const c=caps(),unit=$('resolution').value||Object.keys(c.resolutions)[0],perRev=c.full_steps_per_revolution*(c.resolutions[unit]||1),n=Number($('steps').value),speed=Number($('speed').value);$('stepsLabel').textContent=`${unit} steps`;$('speedLabel').textContent=`${unit} steps/sec`;$('moveEstimate').textContent=$('mode').value==='continuous'?`${perRev} ${unit} steps per revolution · ${(speed/perRev*60).toFixed(1)} nominal RPM`:`${n} ${unit} steps = ${(n/perRev*360).toFixed(1)}° · approximately ${(n/speed).toFixed(1)} seconds at ${speed} ${unit} steps/sec.`;}
 for(const id of ['resolution','steps','speed','mode'])$(id).addEventListener('input',updateEstimate);
 updateEstimate();
 

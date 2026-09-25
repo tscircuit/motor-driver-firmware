@@ -1,8 +1,5 @@
 """TMP102 at 0x48: TI SBOS397I, normal 12-bit mode, active-low comparator."""
 
-WARN_C = 65.0
-TRIP_C = 75.0
-RESTART_C = 60.0
 CONFIG = 0x60C0  # continuous, 8 Hz, one fault, active-low comparator, EM=0
 CONFIG_MASK = 0x7FD0  # exclude OS and read-only ALERT status
 
@@ -25,9 +22,11 @@ def decode_temperature(data):
 
 
 class TMP102:
-    def __init__(self, i2c, address=0x48):
+    def __init__(self, i2c, address=0x48, trip_c=75.0, restart_c=60.0):
         self.i2c = i2c
         self.address = address
+        self.trip_c = trip_c
+        self.restart_c = restart_c
 
     def read_register(self, register):
         data = self.i2c.readfrom_mem(self.address, register, 2)
@@ -36,17 +35,17 @@ class TMP102:
         return (data[0] << 8) | data[1]
 
     def configure(self):
-        # Caller must hold GPIO22 LOW throughout configuration and settling.
+        # Caller must keep the motor disabled throughout configuration and settling.
         self.i2c.writeto_mem(self.address, 1, bytes((CONFIG >> 8, CONFIG & 255)))
-        self.i2c.writeto_mem(self.address, 2, encode_temperature(RESTART_C))
-        self.i2c.writeto_mem(self.address, 3, encode_temperature(TRIP_C))
+        self.i2c.writeto_mem(self.address, 2, encode_temperature(self.restart_c))
+        self.i2c.writeto_mem(self.address, 3, encode_temperature(self.trip_c))
         self.verify()
 
     def verify(self):
         # Detect sensor reset or changed polarity/mode/limits during operation.
         if self.read_register(1) & CONFIG_MASK != CONFIG & CONFIG_MASK:
             raise OSError("TMP102 protection configuration changed")
-        for register, value in ((2, RESTART_C), (3, TRIP_C)):
+        for register, value in ((2, self.restart_c), (3, self.trip_c)):
             encoded = encode_temperature(value)
             if self.read_register(register) != (encoded[0] << 8) | encoded[1]:
                 raise OSError("TMP102 protection threshold changed")
