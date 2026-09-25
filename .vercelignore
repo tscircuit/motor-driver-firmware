@@ -1,0 +1,6 @@
+firmware/
+tests/
+scripts/
+docs/
+build/
+__pycache__/

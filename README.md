@@ -2,7 +2,7 @@
 
 MicroPython motor-control firmware with a Web Serial dashboard. Motion and safety logic are separated from driver chips, board wiring, and MCU services so additional hardware can reuse the controller and protocol.
 
-[Public dashboard](https://seve-motor-temperature.seveibarts.chatgpt.site) · [Porting guide](docs/architecture.md) · [Serial protocol](docs/protocol.md)
+[Public dashboard](https://motorcontrol.tscircuit.com) · [Porting guide](docs/architecture.md) · [Serial protocol](docs/protocol.md)
 
 ## Supported hardware
 
@@ -94,3 +94,10 @@ python3 -m http.server 8000 --directory dist
 Open `http://localhost:8000` in desktop Chrome or Edge. Web Serial needs HTTPS or localhost, and only one client can own the port. The site talks directly to the selected board at 115200 baud; it has no remote-control server or telemetry upload. Keep the page visible while running; hiding it sends Stop. Visiting the public site does not start a motor.
 
 CI runs host tests, JavaScript checks, and firmware staging. Host tests exercise forward/reverse coil sequences, finite motion, heartbeat expiry across clock wrap, sensor/thermal/driver failures, malformed commands, saved settings, USB rename/restart, output cleanup, and an unrelated simulated driver that advertises quarter steps. Physical validation is still required for any new adapter or board.
+
+
+## Dashboard deployment
+
+The Vercel project `tscircuit/motorcontrol` is connected to this repository. Production deployments from `main` serve only `dist/` at https://motorcontrol.tscircuit.com. `vercel.json` configures a static deployment with no install/build step. `.vercelignore` excludes firmware, tests, scripts, and docs from CLI uploads.
+
+Cloudflare DNS: `motorcontrol` is a DNS-only CNAME to `9009e8f2bfd94482.vercel-dns-016.com`. Vercel manages HTTPS. For a manual production deployment, use `vercel deploy --prod --scope tscircuit` from the linked repository root. Local Vercel state and environment files are ignored by Git.

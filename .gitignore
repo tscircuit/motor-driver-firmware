@@ -6,3 +6,6 @@ alarm.json
 device.json
 *.tmp
 build/
+
+.vercel/
+.env*
