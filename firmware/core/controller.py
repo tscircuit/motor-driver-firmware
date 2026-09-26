@@ -19,6 +19,8 @@ def led_value(now, alarm_active, moving):
 
 
 class Controller:
+    TELEMETRY_INTERVAL_MS = 125
+
     def __init__(self, board, platform, settings, emit):
         self.board = board
         self.platform = platform
@@ -81,6 +83,7 @@ class Controller:
                 'shutdown_c': b.shutdown_c, 'threshold_min_c': b.threshold_min_c,
                 'threshold_max_c': b.threshold_max_c, 'buzzer_hz': b.buzzer_hz,
                 'heartbeat_timeout_ms': b.heartbeat_timeout_ms,
+                'telemetry_interval_ms': self.TELEMETRY_INTERVAL_MS,
                 'step_note': self.motor.step_note, 'current_note': b.current_note}
 
     def status(self):
@@ -234,7 +237,7 @@ class Controller:
             self.board.buzzer.set(False)
             self.board.led.value(0)
             self.platform.reset()
-        if self.clock.ticks_diff(now, self.last_emit) >= 250:
+        if self.clock.ticks_diff(now, self.last_emit) >= self.TELEMETRY_INTERVAL_MS:
             self.emit(self.status())
             self.last_emit = now
 

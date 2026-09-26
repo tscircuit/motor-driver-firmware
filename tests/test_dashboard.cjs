@@ -25,3 +25,13 @@ element('resolution').value='quarter';element('steps').value='1600';element('spe
 assert.match(element('moveEstimate').textContent,/1600 quarter steps = 360.0°/);
 assert.equal(element('speed').max,80);assert.equal(element('shutdown').textContent,'70°C · fixed');
 console.log('PASS alternate board capabilities, quarter-step estimates and measured current');
+
+assert.equal(element('tempHint').textContent,'Live · 4 readings per second');
+context.packet=JSON.stringify({...telemetry,capabilities:{telemetry_interval_ms:125}});
+run('receive(packet)');
+assert.equal(element('tempHint').textContent,'Live · 8 readings per second');
+run('points=[]');
+for(let i=0;i<2401;i++)run('receive(packet)');
+assert.equal(run('points.length'),2401);
+assert.equal(element('samples').textContent,'2401 samples');
+console.log('PASS telemetry rate compatibility and five-minute buffer at 8 Hz');
