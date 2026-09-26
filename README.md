@@ -82,6 +82,8 @@ In the dashboard, stop the motor, enter a **USB device name**, and choose **Save
 
 USB naming is a platform capability, not a requirement for motion control. The supplied MicroPython adapter uses [`machine.USBDevice`](https://docs.micropython.org/en/v1.29.0/library/machine.USBDevice.html) when available. It changes product/CDC labels while preserving VID/PID and hardware serial number. It does not change the BOOTSEL bootloader name. Some OS/browser caches require unplugging and reconnecting the programming cable. The dashboard disables renaming if the platform cannot apply it.
 
+The dashboard receives temperature telemetry at 8 Hz (every 125 ms) and retains five minutes of history. Install the updated firmware to use this rate; older firmware continues reporting at 4 Hz. The TMP102 remains configured for 8 Hz conversions, with controller protection checks every 100 ms.
+
 ## Run and test locally
 
 ```sh

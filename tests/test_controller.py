@@ -34,6 +34,21 @@ class ControllerTests(unittest.TestCase):
         args.update(values)
         return self.send('start', **args)
 
+    def test_temperature_telemetry_at_eight_hz_across_clock_wrap(self):
+        self.platform.clock.now = self.platform.clock.modulus - 50
+        self.controller = Controller(self.board, self.platform, Settings(), self.messages.append)
+        for elapsed in range(1000):
+            self.board.temp = 25 + elapsed / 1000
+            self.controller.tick()
+            self.platform.clock.sleep_ms(1)
+        self.assertEqual(len(self.messages), 8)
+        for index, message in enumerate(self.messages):
+            self.assertEqual(message['type'], 'telemetry')
+            self.assertEqual(message['capabilities']['telemetry_interval_ms'], 125)
+            self.assertEqual(message['uptime_ms'],
+                             (self.platform.clock.modulus - 50 + index * 125) % self.platform.clock.modulus)
+            self.assertAlmostEqual(message['temperature_c'], 25 + (index * 125 // 100) / 10)
+
     def test_alternate_driver_and_mcu_finite_move(self):
         self.assertFalse(self.board.motor.enabled)
         self.assertTrue(self.start()['ok'])

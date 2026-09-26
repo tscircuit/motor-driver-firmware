@@ -29,9 +29,9 @@ function receive(line){
  $('deviceIdentity').textContent=`${data.device_name||'MicroPython board'}${data.device_id?' · '+data.device_id:''}`;
  if(!nameDirty)$('deviceName').value=data.device_name||'';
  $('nameHint').textContent=data.usb_name_supported?'Saved on the board. Stop the motor first. After restart, reconnect using the new name.':'USB naming is unavailable on this platform or firmware installation.';
-points.push({t:now,v:t});points=points.filter(p=>p.t>=now-300000).slice(-1300);
+points.push({t:now,v:t});points=points.filter(p=>p.t>=now-300000).slice(-2600);
  $('temperature').textContent=t===null?'—':t.toFixed(1);
- $('tempHint').textContent=data.sensor_error?'Sensor read failed': 'Live · 4 readings per second';
+ $('tempHint').textContent=data.sensor_error?'Sensor read failed': `Live · ${data.capabilities?.telemetry_interval_ms ? 1000/data.capabilities.telemetry_interval_ms : 4} readings per second`;
  $('alarm').textContent=data.sensor_error?'Sensor fault':data.alarm_active?'Alarm active':'Normal';
  $('alarm').classList.toggle('danger',!!data.alarm_active);
  $('alarmHint').textContent=`Buzzer threshold ${data.threshold_c.toFixed(1)}°C${data.buzzer_on?' · sounding':''}`;
@@ -50,12 +50,12 @@ function draw(){
  const lo=Math.min(20,Math.floor((Math.min(...values,25)-5)/10)*10),hi=Math.max(80,Math.ceil((Math.max(...values,threshold)+5)/10)*10);
  const y=v=>T+(hi-v)/(hi-lo)*ph,now=Date.now(),x=t=>L+(t-(now-300000))/300000*pw;
  g.font='12px system-ui';g.lineWidth=1;
- for(let i=0;i<=4;i++){const v=lo+(hi-lo)*i/4,yy=y(v);g.strokeStyle='#273445';g.beginPath();g.moveTo(L,yy);g.lineTo(w-R,yy);g.stroke();g.fillStyle='#91a3b8';g.textAlign='right';g.fillText(v.toFixed(0),L-9,yy+4);}
+ for(let i=0;i<=4;i++){const v=lo+(hi-lo)*i/4,yy=y(v);g.strokeStyle='#e5e7eb';g.beginPath();g.moveTo(L,yy);g.lineTo(w-R,yy);g.stroke();g.fillStyle='#6b7280';g.textAlign='right';g.fillText(v.toFixed(0),L-9,yy+4);}
  g.textAlign='center';for(let i=0;i<=5;i++){g.fillText(i===5?'now':`−${5-i}m`,L+i/5*pw,h-5);}
- if(last){g.strokeStyle='#ffbd70';g.setLineDash([5,5]);g.beginPath();g.moveTo(L,y(threshold));g.lineTo(w-R,y(threshold));g.stroke();g.setLineDash([]);}
- g.save();g.beginPath();g.rect(L,T,pw,ph);g.clip();g.strokeStyle='#75efd0';g.lineWidth=2;g.beginPath();let started=false,prev=0;
+ if(last){g.strokeStyle='#b45309';g.setLineDash([5,5]);g.beginPath();g.moveTo(L,y(threshold));g.lineTo(w-R,y(threshold));g.stroke();g.setLineDash([]);}
+ g.save();g.beginPath();g.rect(L,T,pw,ph);g.clip();g.strokeStyle='#2563eb';g.lineWidth=2;g.beginPath();let started=false,prev=0;
  for(const p of points){if(p.v===null){started=false;continue;}if(!started||p.t-prev>2500)g.moveTo(x(p.t),y(p.v));else g.lineTo(x(p.t),y(p.v));started=true;prev=p.t;}g.stroke();
- const recent=points.at(-1);if(recent?.v!=null){g.fillStyle='#75efd0';g.beginPath();g.arc(x(recent.t),y(recent.v),3,0,Math.PI*2);g.fill();}g.restore();
+ const recent=points.at(-1);if(recent?.v!=null){g.fillStyle='#2563eb';g.beginPath();g.arc(x(recent.t),y(recent.v),3,0,Math.PI*2);g.fill();}g.restore();
  $('empty').style.display=values.length?'none':'flex';
 }
 async function readLoop(){let buffer='';const decoder=new TextDecoder();try{while(port&&reader){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let i;while((i=buffer.indexOf('\n'))>=0){receive(buffer.slice(0,i).trim());buffer=buffer.slice(i+1);}if(buffer.length>8192)buffer='';}}catch(e){if(!closing)message(restartNotice||('USB connection lost: '+e.message));}finally{reader?.releaseLock();reader=null;}}
