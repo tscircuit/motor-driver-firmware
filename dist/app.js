@@ -149,7 +149,7 @@ async function playBytes(song){
 }
 $('playSong').addEventListener('click',()=>{if(loadedSong)void playBytes(loadedSong);});
 $('demoSong').addEventListener('click',async()=>{
- try{const response=await fetch('example-song.bin');if(!response.ok)throw Error('Could not load example tune.');await playBytes(SongBytes.decode(new Uint8Array(await response.arrayBuffer())));}
+ try{const response=await fetch(['example-song.bin','two-tone-song.bin','little-melody.bin'].includes($('presetSong').value)?$('presetSong').value:'example-song.bin');if(!response.ok)throw Error('Could not load selected song.');await playBytes(SongBytes.decode(new Uint8Array(await response.arrayBuffer())));}
  catch(error){message(error.message);}
 });
 $('stopSong').addEventListener('click',async()=>{try{await send('stop_song');message('Song stopped. Temperature alarms remain enabled.');}catch(error){message(error.message);}});

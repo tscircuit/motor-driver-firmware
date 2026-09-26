@@ -115,7 +115,7 @@ This remains a cooperative MicroPython scheduler: USB writes, I2C reads and garb
 
 ## Play buzzer songs
 
-In the Buzzer panel, choose **Play example tune**, or download the example `.bin` bytes, edit/create your own tune and load it with **Load buzzer song** → **Play loaded song**. **Stop song** cancels playback. The file stays local and is sent only to the selected board. Use updated firmware; older boards disable these controls.
+In the Buzzer panel, choose a built-in song (**Ascending chime**, selected by default, **Two-tone call**, or **Little melody**) and click **Play selected song**, or download the example `.bin` bytes, edit/create your own tune and load it with **Load buzzer song** → **Play loaded song**. **Stop song** cancels playback. The file stays local and is sent only to the selected board. Use updated firmware; older boards disable these controls.
 
 The format is up to 48 four-byte notes (192 bytes, 60 seconds): little-endian `uint16` Hz followed by `uint16` milliseconds. Zero Hz is a rest. Allowed frequencies are 100–10000 Hz and note durations 20–5000 ms. This is monophonic buzzer data, not a recorded-audio format. See [song commands and format](docs/protocol.md#buzzer-byte-songs).
 
