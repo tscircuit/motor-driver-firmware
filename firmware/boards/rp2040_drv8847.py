@@ -25,7 +25,12 @@ class Board:
     mcu = 'RP2040'
     full_steps_per_revolution = 200
     min_speed_sps = 5
-    max_speed_sps = 100
+    max_speed_sps = 400
+    start_speed_sps = 10
+    default_acceleration_sps2 = 100
+    min_acceleration_sps2 = 10
+    max_acceleration_sps2 = 1000
+    settle_ms = 100
     max_steps = 100000
     start_below_c = 60
     shutdown_c = 75

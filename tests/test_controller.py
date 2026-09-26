@@ -37,9 +37,10 @@ class ControllerTests(unittest.TestCase):
     def test_alternate_driver_and_mcu_finite_move(self):
         self.assertFalse(self.board.motor.enabled)
         self.assertTrue(self.start()['ok'])
-        for _ in range(4):
+        for _ in range(1000):
+            self.send('heartbeat')
             self.controller.tick()
-            self.platform.clock.sleep_ms(25)
+            self.platform.clock.sleep_ms(1)
         self.assertEqual(self.board.motor.steps, [(1, 'quarter')] * 3)
         self.assertFalse(self.board.motor.enabled)
         status = self.controller.status()
@@ -55,7 +56,7 @@ class ControllerTests(unittest.TestCase):
         self.platform.clock.sleep_ms(1501)
         self.controller.tick()
         self.assertEqual(self.controller.stop_reason, 'Browser heartbeat lost')
-        self.assertEqual(len(self.board.motor.steps), 1)
+        self.assertEqual(len(self.board.motor.steps), 0)
         self.assertFalse(self.board.motor.enabled)
 
     def test_start_requires_recent_heartbeat_and_safe_temperature(self):
@@ -91,6 +92,24 @@ class ControllerTests(unittest.TestCase):
                        {'steps':1.5}, {'steps':True}, {'mode':'bad'}):
             self.assertFalse(self.start(**values)['ok'])
             self.assertFalse(self.board.motor.enabled)
+
+    def test_timing_overrun_stops_without_extra_step(self):
+        self.assertTrue(self.start(mode='continuous')['ok'])
+        self.platform.clock.sleep_us(400000)
+        self.send('heartbeat')
+        self.controller.tick()
+        self.assertFalse(self.board.motor.enabled)
+        self.assertEqual(self.board.motor.steps, [])
+        self.assertIn('timing overrun', self.controller.stop_reason)
+
+    def test_acceleration_validation_and_immediate_stop(self):
+        for value in (0, -1, True, float('nan'), 1001):
+            self.assertFalse(self.start(acceleration_sps2=value)['ok'])
+            self.assertFalse(self.board.motor.enabled)
+        self.assertTrue(self.start(mode='continuous', acceleration_sps2=100)['ok'])
+        self.send('stop')
+        self.assertFalse(self.board.motor.enabled)
+        self.assertEqual(self.board.motor.steps, [])
 
     def test_alarm_hysteresis_and_led_priority(self):
         self.send('set_threshold', threshold_c=45)

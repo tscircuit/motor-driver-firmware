@@ -33,3 +33,7 @@ Telemetry runs every 250 ms and retains existing protocol-3 fields (temperature/
 The dashboard uses these fields to populate options, limits, estimates and hardware labels. Older version-3 firmware without capabilities falls back to the original board values. `current_a: null` / `current_available: false` means no measurement; it is not zero current. `usb_name_supported: false` means the rename control is unavailable, without disabling motion commands.
 
 Device renaming preserves VID/PID and serial number in the provided USB adapter. The connection drops during reset; reconnect after the device re-enumerates. No move is resumed after reconnect.
+
+## Ramped motion additions (protocol 3)
+
+`start` accepts optional `acceleration_sps2` in selected increments/sec². Capabilities add `acceleration_supported`, `min_acceleration_sps2`, `max_acceleration_sps2`, and `default_acceleration_sps2`. Telemetry adds `acceleration_sps2`, `profile_speed_sps`, `late_steps`, and `max_step_lateness_us`. Profile speed is not a measured shaft speed. See README for alignment, final-phase dwell, immediate safety stops, and scheduler limitations.

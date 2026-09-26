@@ -16,7 +16,7 @@ def run(board, platform, settings):
                 controller.handle(line)
             controller.tick()
             watchdog.feed()
-            platform.clock.sleep_ms(1)
+            platform.clock.sleep_us(100 if controller.mode != 'stopped' else 1000)
     finally:
         if controller is not None:
             controller.close()

@@ -68,7 +68,7 @@ For a new board, add its composition module and select it with `--board`; do not
 | I2C1 SDA / SCL | 26 / 27 |
 | Buzzer | 16 |
 
-The DRV8847 profile allows 5–100 selected steps/sec and up to 100,000 steps per move. Full steps are 1.8°; half steps are 0.9°. Quarter steps require controllable intermediate winding currents and are not supported on this PCB. Half stepping alternates one/two energized coils without current normalization, so torque ripple and additional heating are possible. Step counts are commanded, not encoder measurements; alignment and missed steps affect actual position.
+The DRV8847 profile allows 5–400 selected steps/sec and up to 100,000 steps per move. Full steps are 1.8°; half steps are 0.9°. Quarter steps require controllable intermediate winding currents and are not supported on this PCB. Half stepping alternates one/two energized coils without current normalization, so torque ripple and additional heating are possible. Step counts are commanded, not encoder measurements; alignment and missed steps affect actual position.
 
 There is no MCU measurement path for current or motor supply voltage on this board. The nominal hardware current trip is about 1 A; this is neither a measured current nor a validated continuous thermal rating. The encoder may remain disconnected.
 
@@ -101,3 +101,14 @@ CI runs host tests, JavaScript checks, and firmware staging. Host tests exercise
 The Vercel project `tscircuit/motorcontrol` is connected to this repository. Production deployments from `main` serve only `dist/` at https://motorcontrol.tscircuit.com. `vercel.json` configures a static deployment with no install/build step. `.vercelignore` excludes firmware, tests, scripts, and docs from CLI uploads.
 
 Cloudflare DNS: `motorcontrol` is a DNS-only CNAME to `9009e8f2bfd94482.vercel-dns-016.com`. Vercel manages HTTPS. For a manual production deployment, use `vercel deploy --prod --scope tscircuit` from the linked repository root. Local Vercel state and environment files are ignored by Git.
+
+
+## Ramped motion and timing diagnostics
+
+Updated firmware accepts an optional `acceleration_sps2` on `start` (default 100, range 10–1000 selected increments/sec²). It energizes the retained phase for 100 ms, starts at at most 10 selected increments/sec, then follows a distance-based trapezoidal profile. Short finite moves use a triangular profile; finite moves decelerate before the last step and hold its phase for one final interval before releasing. Continuous moves ramp to the requested speed. Stop, disconnect, heartbeat loss and faults still release immediately; these are emergency stops, not deceleration requests.
+
+The RP2040 profile now advertises up to 400 selected increments/sec (120 nominal RPM in full steps, 60 in half steps). This is a software ceiling, **not a hardware-validated no-skip speed**. Start with 40 steps/sec and 100 steps/sec², then increase gradually with an unloaded motor. Initial alignment can move the shaft and is not counted as a commanded step.
+
+Scheduling uses microsecond deadlines and a 100 µs active-loop sleep instead of millisecond rounding and a 1 ms sleep. Late steps are never emitted in catch-up bursts. A delay greater than the larger of 20 ms or one step interval stops the move. Telemetry reports `profile_speed_sps` (planned, not measured), `late_steps` (over 250 µs late) and `max_step_lateness_us`, reset per move. These counters measure scheduler lateness, not shaft skips.
+
+This remains a cooperative MicroPython scheduler: USB writes, I2C reads and garbage collection can still delay steps, and actual speed can be below the profile. It is not PIO/timer-isolated motion. Host tests cover ramps, deceleration, exact counts, clock wrap and overrun shutdown; physical high-speed timing and skipping remain unverified. Supply dropouts, the hardware current limit and insufficient torque cannot be eliminated by these firmware changes. Faster controls are enabled only when the connected firmware advertises them; upload the complete new firmware tree to use them.

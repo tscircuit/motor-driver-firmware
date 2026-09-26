@@ -7,7 +7,7 @@ const caps=()=>({...defaults,...(last?.capabilities||{})});
 let nameDirty=false,renaming=false,restartNotice=null;
 let points=[],pending=new Map(),dirty=false,writeChain=Promise.resolve();
 const message=t=>{$('message').textContent=t;};
-function controls(){const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500;$('beep').disabled=!live||renaming;$('deviceName').disabled=!live||!last?.usb_name_supported||!!last?.motor_enabled||renaming;$('rename').disabled=$('deviceName').disabled;$('threshold').disabled=!live;$('apply').disabled=!live||!!last?.motor_enabled||renaming;for(const id of ['mode','resolution','direction','steps','speed','start'])$(id).disabled=!live||last?.protocol!==3||!!last?.motor_enabled||renaming||!!last?.restarting;$('stop').disabled=!port;$('connect').disabled=connecting||renaming||closing;$('connect').textContent=port?'Disconnect':'Connect board ↗';}
+function controls(){const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500;$('beep').disabled=!live||renaming;$('deviceName').disabled=!live||!last?.usb_name_supported||!!last?.motor_enabled||renaming;$('rename').disabled=$('deviceName').disabled;$('threshold').disabled=!live;$('apply').disabled=!live||!!last?.motor_enabled||renaming;for(const id of ['mode','resolution','direction','steps','speed','start'])$(id).disabled=!live||last?.protocol!==3||!!last?.motor_enabled||renaming||!!last?.restarting;$('acceleration').disabled=!live||!caps().acceleration_supported||!!last?.motor_enabled||renaming||!!last?.restarting;$('stop').disabled=!port;$('connect').disabled=connecting||renaming||closing;$('connect').textContent=port?'Disconnect':'Connect board ↗';}
 function send(cmd,fields={}){
  if(!port||!port.writable)return Promise.reject(Error('Connect the board first.'));
  const id=nextId++;
@@ -83,7 +83,7 @@ if(context?.registerTool){try{Promise.resolve(context.registerTool({name:'read_m
 function heartbeat(){if(!port?.writable||document.hidden||closing||renaming)return;const target=port;writeChain=writeChain.catch(()=>{}).then(async()=>{if(!target.writable)return;const w=target.writable.getWriter();try{await w.write(new TextEncoder().encode('{"cmd":"heartbeat"}\n'));}finally{w.releaseLock();}}).catch(()=>{});}
 setInterval(heartbeat,400);
 $('mode').addEventListener('change',()=>{$('stepsField').hidden=$('mode').value==='continuous';$('steps').required=$('mode').value==='steps';});
-$('motionForm').addEventListener('submit',async e=>{e.preventDefault();const mode=$('mode').value;const c=caps(),speed=Number($('speed').value),steps=Number($('steps').value);if(!Number.isFinite(speed)||speed<c.min_speed_sps||speed>c.max_speed_sps||(mode==='steps'&&(!Number.isInteger(steps)||steps<1||steps>c.max_steps))){message(`Use ${c.min_speed_sps}–${c.max_speed_sps} steps/sec and 1–${c.max_steps} whole steps.`);return;}try{heartbeat();await send('start',{mode,direction:Number($('direction').value),speed_sps:speed,steps,resolution:$('resolution').value});message('Movement started. Press Stop to release the motor.');}catch(error){message(error.message);try{await send('stop');}catch{}}});
+$('motionForm').addEventListener('submit',async e=>{e.preventDefault();const mode=$('mode').value;const c=caps(),speed=Number($('speed').value),steps=Number($('steps').value);if(!Number.isFinite(speed)||speed<c.min_speed_sps||speed>c.max_speed_sps||(mode==='steps'&&(!Number.isInteger(steps)||steps<1||steps>c.max_steps))){message(`Use ${c.min_speed_sps}–${c.max_speed_sps} steps/sec and 1–${c.max_steps} whole steps.`);return;}if(c.acceleration_supported){const a=Number($('acceleration').value);if(!Number.isFinite(a)||a<c.min_acceleration_sps2||a>c.max_acceleration_sps2){message(`Use acceleration from ${c.min_acceleration_sps2} to ${c.max_acceleration_sps2} steps/sec².`);return;}}try{heartbeat();await send('start',{mode,direction:Number($('direction').value),speed_sps:speed,steps,resolution:$('resolution').value,...(caps().acceleration_supported?{acceleration_sps2:Number($('acceleration').value)}:{})});message('Movement started. Press Stop to release the motor.');}catch(error){message(error.message);try{await send('stop');}catch{}}});
 $('stop').addEventListener('click',async()=>{try{await send('stop');message('Motor stopped and coils released.');}catch(error){message('Stop not acknowledged. Automatic stop follows if the connection is lost.');}});
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&port)void send('stop').catch(()=>{});});
 window.addEventListener('pagehide',()=>{if(port)void send('stop').catch(()=>{});});
@@ -91,6 +91,7 @@ window.addEventListener('pagehide',()=>{if(port)void send('stop').catch(()=>{});
 function updateCapabilities(){
  const c=caps(),key=JSON.stringify(c);
  $('boardLabel').textContent=last?.board||'MOTOR CONTROLLER';
+ $('timingStatus').textContent=c.acceleration_supported?`Ramped motion · profile ${Number(last?.profile_speed_sps||0).toFixed(1)} steps/sec · ${last?.late_steps||0} late steps · worst delay ${((last?.max_step_lateness_us||0)/1000).toFixed(2)} ms. Timing counters do not measure motor skips.`:'Install updated firmware for acceleration and higher speeds (older firmware retains its speed limit).';
  const measured=last?.current_available&&Number.isFinite(last.current_a);
  $('current').textContent=measured?`${last.current_a.toFixed(2)} A`:'Unavailable';
  $('currentHint').textContent=measured?'Measured current':(c.current_note||'No current measurement connection to the MCU.');
@@ -98,6 +99,8 @@ function updateCapabilities(){
   const selected=$('resolution').value;
   $('resolution').replaceChildren(...Object.entries(c.resolutions).map(([name,factor])=>{const option=document.createElement('option');option.value=name;option.textContent=`${name} · ${(360/(c.full_steps_per_revolution*factor)).toFixed(2)}°`;return option;}));
   $('resolution').value=Object.hasOwn(c.resolutions,selected)?selected:Object.keys(c.resolutions)[0];
+  $('acceleration').min=c.min_acceleration_sps2||10;$('acceleration').max=c.max_acceleration_sps2||1000;
+  $('acceleration').value=c.default_acceleration_sps2||100;
   $('speed').min=c.min_speed_sps;$('speed').max=c.max_speed_sps;$('steps').max=c.max_steps;
   $('speed').value=Math.max(c.min_speed_sps,Math.min(Number($('speed').value)||40,c.max_speed_sps));
   $('threshold').min=c.threshold_min_c;$('threshold').max=c.threshold_max_c;
@@ -108,7 +111,7 @@ function updateCapabilities(){
   capabilityKey=key;updateEstimate();
  }
 }
-function updateEstimate(){const c=caps(),unit=$('resolution').value||Object.keys(c.resolutions)[0],perRev=c.full_steps_per_revolution*(c.resolutions[unit]||1),n=Number($('steps').value),speed=Number($('speed').value);$('stepsLabel').textContent=`${unit} steps`;$('speedLabel').textContent=`${unit} steps/sec`;$('moveEstimate').textContent=$('mode').value==='continuous'?`${perRev} ${unit} steps per revolution · ${(speed/perRev*60).toFixed(1)} nominal RPM`:`${n} ${unit} steps = ${(n/perRev*360).toFixed(1)}° · approximately ${(n/speed).toFixed(1)} seconds at ${speed} ${unit} steps/sec.`;}
+function updateEstimate(){const c=caps(),unit=$('resolution').value||Object.keys(c.resolutions)[0],perRev=c.full_steps_per_revolution*(c.resolutions[unit]||1),n=Number($('steps').value),speed=Number($('speed').value);$('stepsLabel').textContent=`${unit} steps`;$('speedLabel').textContent=`${unit} steps/sec`;$('moveEstimate').textContent=$('mode').value==='continuous'?`${perRev} ${unit} steps per revolution · ${(speed/perRev*60).toFixed(1)} nominal RPM`:`${n} ${unit} steps = ${(n/perRev*360).toFixed(1)}° · at least ${(n/speed).toFixed(1)} seconds plus ramps/alignment at ${speed} ${unit} steps/sec.`;}
 for(const id of ['resolution','steps','speed','mode'])$(id).addEventListener('input',updateEstimate);
 updateEstimate();
 

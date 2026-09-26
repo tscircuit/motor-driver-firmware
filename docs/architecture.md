@@ -34,7 +34,7 @@ Create `firmware/drivers/<chip>.py` with this contract:
 
 A STEP/DIR chip can implement `step()` as a pulse with appropriate direction setup/hold timing. A UART/SPI-configured chip owns that register protocol and current configuration in its adapter. Do not emulate microstepping by advertising resolutions unsupported by the physical driver and wiring. A fixed-mode board should advertise only its actual mode.
 
-The controller never sees coil phases or chip registers. Its scheduler currently uses millisecond deadlines and executes at most one step per iteration; it is intended for low-speed bench control, with no acceleration or timing compensation. Higher rates, DMA/PIO, or queued trajectory control require an explicit scheduler/driver contract extension and tests, not just a higher `max_speed_sps` value.
+The controller never sees coil phases or chip registers. Its scheduler uses microsecond deadlines, a distance-based acceleration/deceleration profile, and executes at most one step per iteration; it is intended for low-speed bench control, with no acceleration or timing compensation. Higher rates, DMA/PIO, or queued trajectory control require an explicit scheduler/driver contract extension and tests, not just a higher `max_speed_sps` value.
 
 `tests/fakes.py` supplies a simulated non-DRV8847 driver with full/quarter stepping to demonstrate the contract. It is not a hardware implementation.
 
@@ -65,7 +65,7 @@ A platform supplies:
 
 | Member | Contract |
 | --- | --- |
-| `clock` | `ticks_ms()`, wrapping `ticks_diff(a,b)`, `ticks_add(t,delta)`, `sleep_ms(ms)` |
+| `clock` | `ticks_ms()`, `ticks_us()`, wrapping `ticks_diff(a,b)`, `ticks_add(t,delta)`, `sleep_ms(ms)`, `sleep_us(us)` |
 | `watchdog(timeout_ms)` | Return an object with `feed()`; raise if the requested protection cannot be provided |
 | `transport()` | `read_lines()` returns a bounded batch without blocking; `write_line(str)` sends JSON plus newline |
 | `device_id()` | Stable per-device identifier string |
@@ -82,3 +82,5 @@ The default settings adapter needs Python-compatible `json`, `os.rename`, and a 
 Preserve motor-disabled boot, explicit starts, bounded command input, heartbeat lease, thermal/driver shutdown, watchdog protection, no automatic resume, and output cleanup on exceptions. A driver's enable failure is followed by `disable()`; runtime exceptions also release outputs before propagating. A malformed command must not energize hardware.
 
 Before calling a new target supported, test pin safe states, timing, fault polarity, sensor failures, current limits, watchdog reset, reconnect behavior, persisted settings, and USB enumeration on that hardware. Host tests establish software behavior, not electrical correctness or timing guarantees.
+
+Motion profile settings in a board may override `start_speed_sps`, `default_acceleration_sps2`, `min_acceleration_sps2`, `max_acceleration_sps2` and `settle_ms`. Defaults are 10, 100, 10, 1000 and 100 respectively. Clock microsecond tick operations must use the same wrap semantics as millisecond ticks.

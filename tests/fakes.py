@@ -9,6 +9,12 @@ class Clock:
     modulus = 1 << 30
     now = 0
 
+    def ticks_us(self):
+        return int(self.now * 1000) % self.modulus
+
+    def sleep_us(self, value):
+        self.now = (self.now + value / 1000) % self.modulus
+
     def ticks_ms(self):
         return self.now
 

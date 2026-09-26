@@ -30,6 +30,9 @@ class DRV8847:
         self.enable_pin.value(1)
         self.enabled = True
         self.clock.sleep_ms(3)
+        # Energize the retained phase before the controller alignment dwell.
+        for pin, value in zip(self.inputs, self.states[self.phase]):
+            pin.value(value)
 
     def disable(self):
         self.enable_pin.value(0)

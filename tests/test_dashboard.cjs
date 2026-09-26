@@ -25,3 +25,8 @@ element('resolution').value='quarter';element('steps').value='1600';element('spe
 assert.match(element('moveEstimate').textContent,/1600 quarter steps = 360.0°/);
 assert.equal(element('speed').max,80);assert.equal(element('shutdown').textContent,'70°C · fixed');
 console.log('PASS alternate board capabilities, quarter-step estimates and measured current');
+context.packet=JSON.stringify({...telemetry,capabilities:{max_speed_sps:400,acceleration_supported:true,min_acceleration_sps2:10,max_acceleration_sps2:1000,default_acceleration_sps2:100},profile_speed_sps:200,late_steps:2,max_step_lateness_us:500});run('receive(packet)');
+assert.equal(element('speed').max,400);assert.equal(element('acceleration').disabled,false);
+assert.equal(element('acceleration').value,100);assert.match(element('timingStatus').textContent,/2 late steps/);
+context.packet=JSON.stringify(telemetry);run('receive(packet)');assert.equal(element('speed').max,100);assert.equal(element('acceleration').disabled,true);
+console.log('PASS new acceleration/speed capabilities and old-firmware fallback');

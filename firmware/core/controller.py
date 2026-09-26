@@ -1,6 +1,7 @@
 """Portable motion, protection and JSON command handling; no machine imports."""
 import json
 import math
+from core.motion import Motion
 
 
 def number(value, low, high):
@@ -40,10 +41,11 @@ class Controller:
         self.mode = 'stopped'
         self.direction = 1
         self.speed = max(board.min_speed_sps, min(40, board.max_speed_sps))
+        self.motion = None
+        self.acceleration = getattr(board, 'default_acceleration_sps2', 100)
         self.remaining = 0
         self.executed = 0
         now = self.clock.ticks_ms()
-        self.next_step = now
         self.test_until = now
         self.last_sample = self.clock.ticks_add(now, -1000)
         self.last_emit = self.clock.ticks_add(now, -1000)
@@ -77,6 +79,10 @@ class Controller:
         return {'resolutions': self.motor.resolutions,
                 'full_steps_per_revolution': b.full_steps_per_revolution,
                 'min_speed_sps': b.min_speed_sps, 'max_speed_sps': b.max_speed_sps,
+                'acceleration_supported': True,
+                'min_acceleration_sps2': getattr(b, 'min_acceleration_sps2', 10),
+                'max_acceleration_sps2': getattr(b, 'max_acceleration_sps2', 1000),
+                'default_acceleration_sps2': getattr(b, 'default_acceleration_sps2', 100),
                 'max_steps': b.max_steps, 'start_below_c': b.start_below_c,
                 'shutdown_c': b.shutdown_c, 'threshold_min_c': b.threshold_min_c,
                 'threshold_max_c': b.threshold_max_c, 'buzzer_hz': b.buzzer_hz,
@@ -104,6 +110,10 @@ class Controller:
                 'supported_resolutions': list(self.motor.resolutions),
                 'motor_enabled': self.motor.enabled, 'motion_mode': self.mode,
                 'direction': self.direction, 'speed_sps': self.speed,
+                'acceleration_sps2': self.acceleration,
+                'profile_speed_sps': self.motion.rate if self.motion and self.mode != 'stopped' else 0,
+                'late_steps': self.motion.late_steps if self.motion else 0,
+                'max_step_lateness_us': self.motion.max_lateness_us if self.motion else 0,
                 'steps_remaining': self.remaining if self.mode == 'steps' else None,
                 'steps_executed': self.executed, 'stop_reason': self.stop_reason,
                 'current_a': current, 'current_available': current is not None,
@@ -127,6 +137,8 @@ class Controller:
         if isinstance(direction, bool) or direction not in (-1, 1):
             raise ValueError('Direction must be -1 or 1')
         speed = number(command.get('speed_sps'), b.min_speed_sps, b.max_speed_sps)
+        acceleration = number(command.get('acceleration_sps2', getattr(b, 'default_acceleration_sps2', 100)),
+                              getattr(b, 'min_acceleration_sps2', 10), getattr(b, 'max_acceleration_sps2', 1000))
         count = command.get('steps') if mode == 'steps' else 0
         if mode == 'steps':
             number(count, 1, b.max_steps)
@@ -152,7 +164,9 @@ class Controller:
         self.executed = 0
         self.mode = mode
         self.stop_reason = ''
-        self.next_step = self.clock.ticks_ms()
+        self.acceleration = acceleration
+        self.motion = Motion(self.clock, speed, acceleration, getattr(b, 'start_speed_sps', 10),
+                             int(count) if mode == 'steps' else None, getattr(b, 'settle_ms', 100))
 
     def handle(self, line):
         ident = None
@@ -215,15 +229,22 @@ class Controller:
         # Recheck protection after handling commands, before any step.
         self.protect()
         now = self.clock.ticks_ms()
-        if self.mode != 'stopped' and self.clock.ticks_diff(now, self.next_step) >= 0:
-            if self.mode == 'steps' and self.remaining == 0:
-                self.stop('Step move complete')
+        if self.mode == 'steps' and self.remaining == 0 and self.motion.due():
+            self.stop('Step move complete')
+        if self.mode != 'stopped' and self.motion.due():
+            # Large scheduling stalls stop the move instead of silently continuing
+            # with an abrupt torque/speed disturbance. Counts are not encoder data.
+            if self.motion.lateness() > max(20000, self.motion.interval_us):
+                self.motion.max_lateness_us = max(self.motion.max_lateness_us, self.motion.lateness())
+                self.stop('Motion timing overrun; reduce speed')
             else:
                 self.motor.step(self.direction)
+                self.motion.advanced()
                 self.executed += 1
                 if self.mode == 'steps':
                     self.remaining -= 1
-                self.next_step = self.clock.ticks_add(now, round(1000 / self.speed))
+                    # Retain the final phase for one interval so the rotor can
+                    # follow it; safety stops still release immediately.
         self.sounding = ((self.alarm and now % 1000 < 200)
                          or self.clock.ticks_diff(self.test_until, now) > 0)
         self.board.buzzer.set(self.sounding)
