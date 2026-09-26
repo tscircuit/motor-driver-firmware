@@ -2,6 +2,7 @@
 import json
 import math
 from core.motion import Motion
+from core.song import Song, MAX_BYTES
 
 
 def number(value, low, high):
@@ -31,6 +32,8 @@ class Controller:
         self.threshold = settings.load_threshold(board.threshold_default_c,
                                                  board.threshold_min_c,
                                                  board.threshold_max_c)
+        self.song = Song(self.clock)
+        self.buzzer_frequency = 0
         self.reset_at = None
         self.temperature = None
         self.sensor_error = None
@@ -54,6 +57,7 @@ class Controller:
 
     def stop(self, reason):
         self.motor.disable()
+        self.song.stop()
         self.mode = 'stopped'
         self.stop_reason = reason
 
@@ -76,7 +80,9 @@ class Controller:
 
     def capabilities(self):
         b = self.board
-        return {'resolutions': self.motor.resolutions,
+        return {'song_supported': callable(getattr(b.buzzer, 'play', None)),
+                'song_format': 'u16le-hz-u16le-ms', 'song_max_bytes': MAX_BYTES,
+                'resolutions': self.motor.resolutions,
                 'full_steps_per_revolution': b.full_steps_per_revolution,
                 'min_speed_sps': b.min_speed_sps, 'max_speed_sps': b.max_speed_sps,
                 'acceleration_supported': True,
@@ -102,7 +108,8 @@ class Controller:
                 'restarting': self.reset_at is not None, 'led_on': self.led_on,
                 'led_mode': 'alarm' if self.alarm else 'running' if self.mode != 'stopped' else 'off',
                 'threshold_c': self.threshold, 'alarm_active': self.alarm,
-                'buzzer_on': self.sounding, 'sensor_error': self.sensor_error,
+                'buzzer_on': self.sounding, 'buzzer_frequency_hz': self.buzzer_frequency,
+                'song_playing': self.song.playing, 'song_note': self.song.index + 1 if self.song.playing else 0, 'sensor_error': self.sensor_error,
                 'thermal_alert': self.board.thermal_alert(),
                 'driver_fault_asserted': self.motor.fault_asserted(),
                 'step_resolution': self.resolution,
@@ -157,6 +164,7 @@ class Controller:
         except Exception:
             self.stop('Driver or thermal fault at wake')
             raise
+        self.song.stop()
         self.resolution = resolution
         self.direction = direction
         self.speed = speed
@@ -199,7 +207,21 @@ class Controller:
                 self.device_name = self.settings.save_name(command.get('name'))
                 self.stop('Restarting to apply USB name')
                 self.reset_at = self.clock.ticks_add(self.clock.ticks_ms(), 750)
+            elif operation == 'play_song':
+                if self.mode != 'stopped' or self.reset_at is not None:
+                    raise ValueError('Stop motor and wait for restart before playing a song')
+                if not callable(getattr(self.board.buzzer, 'play', None)):
+                    raise ValueError('Variable-pitch buzzer unavailable')
+                self.sample()
+                if self.alarm:
+                    raise ValueError('Temperature alarm takes priority over songs')
+                self.song.start(command.get('hex'))
+                self.test_until = self.clock.ticks_ms()
+            elif operation == 'stop_song':
+                self.song.stop()
+                self.test_until = self.clock.ticks_ms()
             elif operation == 'beep':
+                self.song.stop()
                 self.test_until = self.clock.ticks_add(self.clock.ticks_ms(), 600)
             elif operation == 'start':
                 self.start(command)
@@ -245,9 +267,19 @@ class Controller:
                     self.remaining -= 1
                     # Retain the final phase for one interval so the rotor can
                     # follow it; safety stops still release immediately.
-        self.sounding = ((self.alarm and now % 1000 < 200)
-                         or self.clock.ticks_diff(self.test_until, now) > 0)
-        self.board.buzzer.set(self.sounding)
+        if self.alarm:
+            self.song.stop()
+        frequency = self.song.tick(now)
+        if self.alarm:
+            frequency = self.board.buzzer_hz if now % 1000 < 200 else 0
+        elif self.clock.ticks_diff(self.test_until, now) > 0:
+            frequency = self.board.buzzer_hz
+        self.buzzer_frequency = frequency
+        self.sounding = bool(frequency)
+        if callable(getattr(self.board.buzzer, 'play', None)):
+            self.board.buzzer.play(frequency)
+        else:
+            self.board.buzzer.set(self.sounding)
         self.led_on = bool(led_value(now, self.alarm, self.mode != 'stopped'))
         self.board.led.value(int(self.led_on))
         if self.reset_at is not None and self.clock.ticks_diff(now, self.reset_at) >= 0:

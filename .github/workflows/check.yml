@@ -14,4 +14,5 @@ jobs:
       - run: python -m unittest discover -s tests -v
       - run: node --check dist/app.js
       - run: node tests/test_dashboard.cjs
+      - run: node tests/test_song.cjs
       - run: python scripts/build_firmware.py

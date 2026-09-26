@@ -1,13 +1,14 @@
 'use strict';
 const $=id=>document.getElementById(id);
 let port=null,reader=null,reading=null,connecting=false,closing=false,last=null,lastSeen=0,nextId=1;
+let loadedSong=null,songBusy=false,songFileVersion=0;
 let capabilityKey='';
 const defaults={resolutions:{full:1,half:2},full_steps_per_revolution:200,min_speed_sps:5,max_speed_sps:100,max_steps:100000,threshold_min_c:10,threshold_max_c:74,shutdown_c:75,heartbeat_timeout_ms:1500,buzzer_hz:2731};
 const caps=()=>({...defaults,...(last?.capabilities||{})});
 let nameDirty=false,renaming=false,restartNotice=null;
 let points=[],pending=new Map(),dirty=false,writeChain=Promise.resolve();
 const message=t=>{$('message').textContent=t;};
-function controls(){const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500;$('beep').disabled=!live||renaming;$('deviceName').disabled=!live||!last?.usb_name_supported||!!last?.motor_enabled||renaming;$('rename').disabled=$('deviceName').disabled;$('threshold').disabled=!live;$('apply').disabled=!live||!!last?.motor_enabled||renaming;for(const id of ['mode','resolution','direction','steps','speed','start'])$(id).disabled=!live||last?.protocol!==3||!!last?.motor_enabled||renaming||!!last?.restarting;$('acceleration').disabled=!live||!caps().acceleration_supported||!!last?.motor_enabled||renaming||!!last?.restarting;$('stop').disabled=!port;$('connect').disabled=connecting||renaming||closing;$('connect').textContent=port?'Disconnect':'Connect board ↗';}
+function controls(){const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500;$('beep').disabled=!live||renaming;const songReady=live&&caps().song_supported&&!last?.motor_enabled&&!last?.alarm_active&&!last?.restarting&&!renaming&&!songBusy;$('playSong').disabled=!songReady||!loadedSong;$('demoSong').disabled=!songReady;$('stopSong').disabled=!live||!caps().song_supported;$('deviceName').disabled=!live||!last?.usb_name_supported||!!last?.motor_enabled||renaming;$('rename').disabled=$('deviceName').disabled;$('threshold').disabled=!live;$('apply').disabled=!live||!!last?.motor_enabled||renaming;for(const id of ['mode','resolution','direction','steps','speed','start'])$(id).disabled=!live||last?.protocol!==3||!!last?.motor_enabled||renaming||!!last?.restarting;$('acceleration').disabled=!live||!caps().acceleration_supported||!!last?.motor_enabled||renaming||!!last?.restarting;$('stop').disabled=!port;$('connect').disabled=connecting||renaming||closing;$('connect').textContent=port?'Disconnect':'Connect board ↗';}
 function send(cmd,fields={}){
  if(!port||!port.writable)return Promise.reject(Error('Connect the board first.'));
  const id=nextId++;
@@ -90,6 +91,7 @@ window.addEventListener('pagehide',()=>{if(port)void send('stop').catch(()=>{});
 
 function updateCapabilities(){
  const c=caps(),key=JSON.stringify(c);
+ $('songStatus').textContent=!c.song_supported?'Update firmware to enable songs.':last?.alarm_active?'Alarm active · songs interrupted':last?.song_playing?`Playing note ${last.song_note} · ${last.buzzer_frequency_hz||0} Hz`:'Song stopped';
  $('boardLabel').textContent=last?.board||'MOTOR CONTROLLER';
  $('timingStatus').textContent=c.acceleration_supported?`Ramped motion · profile ${Number(last?.profile_speed_sps||0).toFixed(1)} steps/sec · ${last?.late_steps||0} late steps · worst delay ${((last?.max_step_lateness_us||0)/1000).toFixed(2)} ms. Timing counters do not measure motor skips.`:'Install updated firmware for acceleration and higher speeds (older firmware retains its speed limit).';
  const measured=last?.current_available&&Number.isFinite(last.current_a);
@@ -128,3 +130,26 @@ $('nameForm').addEventListener('submit',async e=>{
  }catch(error){message(error.message+' If the board restarted, reconnect to check its name.');}
  finally{renaming=false;controls();}
 });
+
+$('songFile').addEventListener('change',async()=>{
+ const version=++songFileVersion;loadedSong=null;controls();const file=$('songFile').files[0];
+ if(!file){$('songFileInfo').textContent='No song selected.';return;}
+ try{
+  if(file.size>192)throw Error('Maximum file size is 192 bytes (48 notes).');
+  const song=SongBytes.decode(new Uint8Array(await file.arrayBuffer()));
+  if(version!==songFileVersion)return;
+  loadedSong=song;$('songFileInfo').textContent=`${file.name} · ${song.notes} notes · ${(song.duration/1000).toFixed(2)} seconds`;
+ }catch(error){if(version===songFileVersion)$('songFileInfo').textContent=error.message;}
+ controls();
+});
+async function playBytes(song){
+ songBusy=true;controls();
+ try{await send('play_song',{hex:song.hex});message(`Song started: ${song.notes} notes, ${(song.duration/1000).toFixed(2)} seconds.`);}
+ catch(error){message(error.message);}finally{songBusy=false;controls();}
+}
+$('playSong').addEventListener('click',()=>{if(loadedSong)void playBytes(loadedSong);});
+$('demoSong').addEventListener('click',async()=>{
+ try{const response=await fetch('example-song.bin');if(!response.ok)throw Error('Could not load example tune.');await playBytes(SongBytes.decode(new Uint8Array(await response.arrayBuffer())));}
+ catch(error){message(error.message);}
+});
+$('stopSong').addEventListener('click',async()=>{try{await send('stop_song');message('Song stopped. Temperature alarms remain enabled.');}catch(error){message(error.message);}});

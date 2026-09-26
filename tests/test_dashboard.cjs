@@ -30,3 +30,9 @@ assert.equal(element('speed').max,400);assert.equal(element('acceleration').disa
 assert.equal(element('acceleration').value,100);assert.match(element('timingStatus').textContent,/2 late steps/);
 context.packet=JSON.stringify(telemetry);run('receive(packet)');assert.equal(element('speed').max,100);assert.equal(element('acceleration').disabled,true);
 console.log('PASS new acceleration/speed capabilities and old-firmware fallback');
+context.packet=JSON.stringify({...telemetry,capabilities:{song_supported:true}});run('receive(packet)');
+assert.equal(element('demoSong').disabled,false);assert.equal(element('playSong').disabled,true);
+run("loadedSong={hex:'b8016400',notes:1,duration:100};controls()");assert.equal(element('playSong').disabled,false);
+context.packet=JSON.stringify({...telemetry,capabilities:{song_supported:true},alarm_active:true});run('receive(packet)');assert.equal(element('playSong').disabled,true);assert.equal(element('stopSong').disabled,false);
+context.packet=JSON.stringify(telemetry);run('receive(packet)');assert.equal(element('demoSong').disabled,true);
+console.log('PASS song capability, file selection and alarm gating');

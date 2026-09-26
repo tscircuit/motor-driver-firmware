@@ -111,6 +111,30 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(self.board.motor.enabled)
         self.assertEqual(self.board.motor.steps, [])
 
+    def test_song_command_alarm_priority_and_stop(self):
+        from test_song import tune
+        ack=self.send('play_song', hex=tune((440,500),(880,500)))
+        self.assertTrue(ack['ok']);self.controller.tick()
+        self.assertEqual(self.board.buzzer.frequency,440)
+        self.assertTrue(self.controller.status()['song_playing'])
+        self.board.temp=70;self.platform.clock.sleep_ms(100);self.controller.tick()
+        self.assertFalse(self.controller.song.playing)
+        self.assertEqual(self.board.buzzer.frequency,self.board.buzzer_hz)
+        self.assertFalse(self.send('play_song',hex=tune((440,100)))['ok'])
+        self.send('stop_song');self.controller.tick()
+        self.assertTrue(self.controller.alarm)
+        self.board.temp=25;self.controller.sample()
+        self.assertTrue(self.send('play_song',hex=tune((880,100)))['ok'])
+        self.send('stop_song');self.controller.tick()
+        self.assertEqual(self.board.buzzer.frequency,0)
+
+    def test_motion_cancels_song_and_rejects_new_song(self):
+        from test_song import tune
+        self.send('play_song',hex=tune((440,500)))
+        self.assertTrue(self.start(mode='continuous')['ok'])
+        self.assertFalse(self.controller.song.playing)
+        self.assertFalse(self.send('play_song',hex=tune((440,100)))['ok'])
+
     def test_alarm_hysteresis_and_led_priority(self):
         self.send('set_threshold', threshold_c=45)
         self.board.temp = 46

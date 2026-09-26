@@ -13,6 +13,16 @@ class Tone:
         self.pwm.freq(frequency)
         self.set(False)
 
+    def play(self, frequency):
+        if frequency:
+            if getattr(self, 'frequency', None) != frequency:
+                self.pwm.duty_u16(0)
+                self.pwm.freq(frequency)
+                self.frequency = frequency
+            self.pwm.duty_u16(32768)
+        else:
+            self.pwm.duty_u16(0)
+
     def set(self, sounding):
         self.pwm.duty_u16(32768 if sounding else 0)
 

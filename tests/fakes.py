@@ -45,6 +45,10 @@ class Buzzer:
     sounding = False
     closed = False
 
+    def play(self, frequency):
+        self.frequency = frequency
+        self.sounding = bool(frequency)
+
     def set(self, value):
         self.sounding = value
 

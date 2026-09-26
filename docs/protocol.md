@@ -37,3 +37,13 @@ Device renaming preserves VID/PID and serial number in the provided USB adapter.
 ## Ramped motion additions (protocol 3)
 
 `start` accepts optional `acceleration_sps2` in selected increments/sec². Capabilities add `acceleration_supported`, `min_acceleration_sps2`, `max_acceleration_sps2`, and `default_acceleration_sps2`. Telemetry adds `acceleration_sps2`, `profile_speed_sps`, `late_steps`, and `max_step_lateness_us`. Profile speed is not a measured shaft speed. See README for alignment, final-phase dwell, immediate safety stops, and scheduler limitations.
+
+## Buzzer byte songs
+
+`{"cmd":"play_song","id":1,"hex":"b80164000000140070036400"}` plays A4 (440 Hz) for 100 ms, a 20 ms rest, then A5 (880 Hz) for 100 ms. `{"cmd":"stop_song","id":2}` cancels playback/test tone without silencing temperature protection. Successful commands use the normal acknowledgement format.
+
+Binary `.bin` files contain repeated four-byte records: unsigned 16-bit frequency in Hz, then unsigned 16-bit duration in milliseconds, both little-endian. Frequency is 0 (rest) or 100–10000 Hz; duration is 20–5000 ms. Maximum 192 bytes / 48 records / 60 seconds. The dashboard validates the file locally and sends its hex encoding in one command, below the 512-character framing limit. MP3/WAV/MIDI decoding is not provided. Tunes are held in RAM and not saved to flash.
+
+Playback is nonblocking, requires the motor stopped, and is rejected during alarms or pending resets. Starting a motor, stopping/disconnecting, a test tone or a temperature/sensor alarm cancels the tune. A tune does not resume after an alarm. An abrupt cable removal allows the bounded tune to finish if the board stays powered. The default variable-pitch adapter uses PWM; other boards can omit `buzzer.play(hz)` to report unsupported.
+
+Capabilities: `song_supported`, `song_format: "u16le-hz-u16le-ms"`, `song_max_bytes`. Telemetry: `song_playing`, `song_note` (1-based, 0 idle), `buzzer_frequency_hz`. `buzzer_on` is false during rests. Download `dist/example-song.bin` for an original ascending example tune.
