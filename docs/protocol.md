@@ -47,3 +47,16 @@ Binary `.bin` files contain repeated four-byte records: unsigned 16-bit frequenc
 Playback is nonblocking, requires the motor stopped, and is rejected during alarms or pending resets. Starting a motor, stopping/disconnecting, a test tone or a temperature/sensor alarm cancels the tune. A tune does not resume after an alarm. An abrupt cable removal allows the bounded tune to finish if the board stays powered. The default variable-pitch adapter uses PWM; other boards can omit `buzzer.play(hz)` to report unsupported.
 
 Capabilities: `song_supported`, `song_format: "u16le-hz-u16le-ms"`, `song_max_bytes`. Telemetry: `song_playing`, `song_note` (1-based, 0 idle), `buzzer_frequency_hz`. `buzzer_on` is false during rests. Download `dist/example-song.bin` for an original ascending example tune.
+
+## Board speech alert
+
+- `{"id":1,"cmd":"set_hot_alert","enabled":true}` saves the spoken-alert preference;
+  `false` restores normal chirps. Boolean only; motor must be stopped and no restart pending.
+- `{"id":2,"cmd":"test_hot_alert"}` plays “HOT HOT HOT” once. Requires stopped motor,
+  no pending restart and no active temperature alarm. `stop_song` or `stop` cancels previews.
+- Alarm playback repeats with a 2000 ms quiet gap after each phrase. Alarm clearance
+  cancels playback. Off/error/unsupported speech uses the existing chirp alarm.
+- Telemetry: `hot_alert_enabled`, `hot_speech_playing`, `hot_speech_error`.
+  Capabilities: `hot_speech_supported`, `hot_speech_pause_ms`. Acknowledgments include
+  `hot_alert_enabled`. `buzzer_frequency_hz` is 0 for speech (not a single tone);
+  `buzzer_on` is true during the phrase. Preview is independent of the saved option.

@@ -48,7 +48,7 @@ Copy **the entire staged directory contents** to the board filesystem root, keep
 
 ```sh
 cd build/firmware
-mpremote connect PORT fs cp -r core drivers sensors platforms boards : + fs cp device_config.py board_config.py main.py boot.py :
+mpremote connect PORT fs cp -r core drivers sensors platforms boards assets : + fs cp device_config.py board_config.py main.py boot.py :
 ```
 
 Press RUN/reset after the copy finishes. Runtime USB naming can cause an `mpremote` soft reset to disconnect the port; reconnect and retry if this happens. Do not resume motor use until all files have uploaded successfully. A running watchdog may interrupt a slow update: use a maintenance MicroPython boot without the application/watchdog before retrying. Never bypass protection in the production profile.
@@ -120,3 +120,26 @@ In the Buzzer panel, choose a built-in song (**Ascending chime**, selected by de
 The format is up to 48 four-byte notes (192 bytes, 60 seconds): little-endian `uint16` Hz followed by `uint16` milliseconds. Zero Hz is a rest. Allowed frequencies are 100–10000 Hz and note durations 20–5000 ms. This is monophonic buzzer data, not a recorded-audio format. See [song commands and format](docs/protocol.md#buzzer-byte-songs).
 
 Example generation: `struct.pack('<HH', 440, 250)` produces one 250 ms A4 note. Concatenate these records and write them as binary. Playback does not block safety checks; songs require the motor stopped and alarms take priority.
+
+## Spoken hot alert
+
+The RP2040 board can play a synthesized “HOT HOT HOT” sample through GPIO16's buzzer.
+In **Spoken temperature alert · board buzzer**, select **On** and **Save** to replace
+chirps with the phrase followed by two seconds of silence, repeating while the
+existing temperature alarm is active. **Off** restores chirps; it does not disable
+thermal protection. The preference is saved in `hot_alert.json` (off on a fresh
+installation). **Test “HOT HOT HOT” once** previews it with the motor stopped.
+The board works independently of the browser. Speech intelligibility depends on
+the buzzer; this is sampled synthesized speech, not a human recording.
+
+Upload the `assets` directory along with the Python files. Missing assets or DMA
+support disable speech and retain chirps. The RP2040 adapter reserves PIO0 SM0
+and dynamically claims one DMA channel. It sends a finite 128 kbit/s pulse-density
+stream, ending low; the control loop does not push individual audio samples.
+The 23.7 KB clip is loaded before the watchdog/control loop starts. Speech errors
+fall back to chirps, and motor safety checks continue during playback.
+
+To replace the sample, provide mono 16 kHz signed 16-bit little-endian PCM (at most
+four seconds) and run `python3 scripts/encode_speech.py input.pcm firmware/assets/hot.pdm`.
+The supplied sample was generated with macOS Samantha at 180 words/minute,
+saying “Hot! Hot! Hot!”, trimmed and filtered to 250–3800 Hz before encoding.

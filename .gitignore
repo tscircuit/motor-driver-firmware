@@ -9,3 +9,5 @@ build/
 
 .vercel/
 .env*
+
+hot_alert.json
