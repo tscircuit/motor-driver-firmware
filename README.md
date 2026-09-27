@@ -136,10 +136,12 @@ Upload the `assets` directory along with the Python files. Missing assets or DMA
 support disable speech and retain chirps. The RP2040 adapter reserves PIO0 SM0
 and dynamically claims one DMA channel. It sends a finite 128 kbit/s pulse-density
 stream, ending low; the control loop does not push individual audio samples.
-The 23.7 KB clip is loaded before the watchdog/control loop starts. Speech errors
+The 40.8 KB clip is loaded before the watchdog/control loop starts. Speech errors
 fall back to chirps, and motor safety checks continue during playback.
 
 To replace the sample, provide mono 16 kHz signed 16-bit little-endian PCM (at most
 four seconds) and run `python3 scripts/encode_speech.py input.pcm firmware/assets/hot.pdm`.
-The supplied sample was generated with macOS Samantha at 180 words/minute,
-saying “Hot! Hot! Hot!”, trimmed and filtered to 250–3800 Hz before encoding.
+The supplied sample was generated with OpenAI gpt-4o-mini-tts (Marin voice),
+saying “Hot! Hot! Hot!” with slow, distinct enunciation. The 2.55-second sample
+is filtered to 250–3800 Hz and resampled to 16 kHz before encoding. The firmware
+adds the two-second pause after playback; it is not part of the audio asset.
