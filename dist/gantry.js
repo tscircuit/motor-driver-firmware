@@ -1,7 +1,7 @@
 'use strict';
 const keys={ArrowLeft:['X',-1],ArrowRight:['X',1],ArrowDown:['Y',-1],ArrowUp:['Y',1]};
 class Jogger {
- constructor(axes,report,clock=()=>Date.now()){this.axes=axes;this.report=report;this.clock=clock;this.key=null;this.active=null;this.phase='idle';this.moving=false;this.stopsPending=0;this.brakeConfirmed=false;this.started=0;this.released=0;this.generation=0;}
+ constructor(axes,report,clock=()=>Date.now()){this.axes=axes;this.report=report;this.clock=clock;this.key=null;this.active=null;this.phase='idle';this.moving=false;this.stopsPending=0;this.brakeConfirmed=false;this.released=0;this.generation=0;}
  unavailableReason(){
   for(const [label,a] of Object.entries(this.axes)){
    if(!a.port||!a.last)return `${label}: connect the board first.`;
@@ -43,14 +43,13 @@ class Jogger {
    if(a.last.motor_enabled){this.moving=true;if(this.phase!=='braking')this.phase='running';}
    else if(this.phase==='braking'&&this.brakeConfirmed&&a.last.stop_reason==='Jog release complete'&&a.seen>=this.released){this.active=null;this.phase='idle';this.moving=false;}
    else if(this.moving&&this.phase!=='braking'){this.report('Board stopped: '+a.last.stop_reason);await this.stop();return;}
-   if(this.active&&((this.phase==='starting'&&this.clock()-this.started>3000)||(this.phase==='braking'&&this.clock()-this.released>this.brakeTimeout))){this.report('Jog transition timed out.');await this.stop();}
    return;
   }
   if(!this.key)return;
   const key=this.key,[axis,sign]=keys[key],a=this.axes[axis],c=a.last.capabilities;
   if(!Number.isFinite(speed)||speed<Math.max(5,c.min_speed_sps??5)||speed>Math.min(100,c.max_speed_sps??100)||!Number.isFinite(acceleration)||acceleration<(c.min_acceleration_sps2??10)||acceleration>(c.max_acceleration_sps2??1000)){await this.stop();this.report('Use the supported speed and acceleration range.');return;}
   if(Object.values(this.axes).some(a=>a.last.motor_enabled)){await this.stop();this.report('Stop existing motion before jogging.');return;}
-  this.active=axis;this.phase='starting';this.moving=false;this.started=this.clock();this.brakeTimeout=3000+speed/acceleration*1000;const generation=this.generation;
+  this.active=axis;this.phase='starting';this.moving=false;const generation=this.generation;
   try{
    await a.send('heartbeat',{},false);
    if(generation!==this.generation||this.key!==key){if(generation===this.generation){this.active=null;this.phase='idle';}return;}

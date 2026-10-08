@@ -184,14 +184,23 @@ class ControllerTests(unittest.TestCase):
             self.assertFalse(self.start(**values)['ok'])
             self.assertFalse(self.board.motor.enabled)
 
-    def test_timing_overrun_stops_without_extra_step(self):
-        self.assertTrue(self.start(mode='continuous')['ok'])
-        self.platform.clock.sleep_us(400000)
-        self.send('heartbeat')
-        self.controller.tick()
-        self.assertFalse(self.board.motor.enabled)
-        self.assertEqual(self.board.motor.steps, [])
-        self.assertIn('timing overrun', self.controller.stop_reason)
+    def test_late_motion_continues_without_catchup_burst(self):
+        for mode in ('continuous', 'steps'):
+            self.send('stop')
+            self.assertTrue(self.start(mode=mode, steps=3)['ok'])
+            before = len(self.board.motor.steps)
+            self.platform.clock.sleep_us(400000)
+            self.send('heartbeat')
+            self.controller.tick()
+            self.assertTrue(self.board.motor.enabled)
+            self.assertEqual(len(self.board.motor.steps), before + 1)
+            self.assertGreater(self.controller.motion.max_lateness_us, 20000)
+            for _ in range(5):
+                self.controller.tick()
+            self.assertEqual(len(self.board.motor.steps), before + 1)
+            self.platform.clock.sleep_us(self.controller.motion.interval_us)
+            self.controller.tick()
+            self.assertEqual(len(self.board.motor.steps), before + 2)
 
     def test_acceleration_validation_and_immediate_stop(self):
         for value in (0, -1, True, float('nan'), 1001):
