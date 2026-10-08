@@ -4,7 +4,7 @@ let now=100,calls=[];
 function setup(){
  calls=[];
  const axes={};
- for(const name of ['X','Y'])axes[name]={port:{},seen:now,last:{protocol:3,temperature_c:25,motor_enabled:false,device_id:name,position_session:'boot-1',position_full_steps:0,capabilities:{resolutions:{half:2},deceleration_supported:true,max_steps:100000}},send:async function(cmd,fields){calls.push([name,cmd,fields]);this.seen=now;if(cmd==='stop'){this.last.motor_enabled=false;this.last.stop_reason='Stopped by user';}if(cmd==='start'){this.last.motor_enabled=true;this.move=fields;}if(cmd==='status'&&this.move){this.last.position_full_steps+=this.move.direction*this.move.steps/2;this.move=null;this.last.motor_enabled=false;this.last.stop_reason='Step move complete';}}};
+ for(const name of ['X','Y'])axes[name]={port:{},seen:now,last:{protocol:3,temperature_c:25,motor_enabled:false,device_id:name,position_session:'boot-1',position_full_steps:0,capabilities:{resolutions:{half:2},deceleration_supported:true,jog_update_supported:true,max_steps:100000}},send:async function(cmd,fields){calls.push([name,cmd,fields]);this.seen=now;if(cmd==='stop'){this.last.motor_enabled=false;this.last.stop_reason='Stopped by user';}if(cmd==='start'){this.last.motor_enabled=true;this.move=fields;}if(cmd==='status'&&this.move){this.last.position_full_steps+=this.move.direction*this.move.steps/2;this.move=null;this.last.motor_enabled=false;this.last.stop_reason='Step move complete';}}};
  const storage={value:null,getItem(){return this.value;},setItem(k,v){this.value=v;}};
  const jog=new Jogger(axes,()=>{},()=>now);const positions=new PositionSlots(axes,jog,()=>{},storage,async()=>{});return {axes,jog,positions,storage};
 }

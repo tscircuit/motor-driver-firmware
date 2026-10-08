@@ -8,7 +8,7 @@ from core.song import Song, MAX_BYTES
 
 def number(value, low, high):
     if (isinstance(value, bool) or not isinstance(value, (int, float))
-            or not math.isfinite(value) or not low <= value <= high):
+            or not math.isfinite(value) or value < low or (high is not None and value > high)):
         raise ValueError('Value outside allowed range')
     return value
 
@@ -45,7 +45,7 @@ class Controller:
         self.resolution = next(iter(self.motor.resolutions))
         self.mode = 'stopped'
         self.direction = 1
-        self.speed = max(board.min_speed_sps, min(40, board.max_speed_sps))
+        self.speed = max(board.min_speed_sps, min(40, board.max_speed_sps or 40))
         self.motion = None
         self.acceleration = getattr(board, 'default_acceleration_sps2', 100)
         self.remaining = 0
@@ -91,7 +91,7 @@ class Controller:
                 'resolutions': self.motor.resolutions,
                 'full_steps_per_revolution': b.full_steps_per_revolution,
                 'min_speed_sps': b.min_speed_sps, 'max_speed_sps': b.max_speed_sps,
-                'acceleration_supported': True, 'deceleration_supported': True,
+                'acceleration_supported': True, 'deceleration_supported': True, 'jog_update_supported': True,
                 'min_acceleration_sps2': getattr(b, 'min_acceleration_sps2', 10),
                 'max_acceleration_sps2': getattr(b, 'max_acceleration_sps2', 1000),
                 'default_acceleration_sps2': getattr(b, 'default_acceleration_sps2', 100),
@@ -154,6 +154,8 @@ class Controller:
         if isinstance(direction, bool) or direction not in (-1, 1):
             raise ValueError('Direction must be -1 or 1')
         speed = number(command.get('speed_sps'), b.min_speed_sps, b.max_speed_sps)
+        if speed <= 0:
+            raise ValueError('Speed must be positive')
         acceleration = number(command.get('acceleration_sps2', getattr(b, 'default_acceleration_sps2', 100)),
                               getattr(b, 'min_acceleration_sps2', 10), getattr(b, 'max_acceleration_sps2', 1000))
         count = command.get('steps') if mode == 'steps' else 0
@@ -186,6 +188,40 @@ class Controller:
         self.acceleration = acceleration
         self.motion = Motion(self.clock, speed, acceleration, getattr(b, 'start_speed_sps', 10),
                              int(count) if mode == 'steps' else None, getattr(b, 'settle_ms', 100))
+
+    def jog(self, command):
+        """Update held-key intent without releasing coils or waiting for telemetry."""
+        if self.mode == 'steps':
+            raise ValueError('Stop finite movement before jogging')
+        if self.mode == 'stopped':
+            self.start(dict(command, mode='continuous'))
+            # Jogging needs only the driver wake delay, not the alignment dwell.
+            self.motion.deadline = self.clock.ticks_add(self.clock.ticks_us(), 1000)
+            return
+        b = self.board
+        speed = number(command.get('speed_sps'), b.min_speed_sps, b.max_speed_sps)
+        if speed <= 0:
+            raise ValueError('Speed must be positive')
+        acceleration = number(command.get('acceleration_sps2', 100),
+                              getattr(b, 'min_acceleration_sps2', 10), getattr(b, 'max_acceleration_sps2', 1000))
+        direction = command.get('direction')
+        resolution = command.get('resolution', self.resolution)
+        if isinstance(direction, bool) or direction not in (-1, 1):
+            raise ValueError('Direction must be -1 or 1')
+        if resolution not in self.motor.resolutions:
+            raise ValueError('Unsupported resolution')
+        if self.reset_at is not None:
+            raise ValueError('Restart pending')
+        previous_rate = self.motion.rate
+        same_direction = direction == self.direction and resolution == self.resolution
+        if resolution != self.resolution:
+            self.motor.enable(resolution)
+        self.direction, self.resolution = direction, resolution
+        self.speed, self.acceleration = speed, acceleration
+        self.mode, self.remaining, self.stop_reason = 'continuous', 0, ''
+        self.motion.retarget(speed, acceleration, previous_rate if same_direction else min(getattr(b, 'start_speed_sps', 10), speed))
+        if not same_direction:
+            self.motion.deadline = self.clock.ticks_add(self.clock.ticks_us(), 1000)
 
     def handle(self, line):
         ident = None
@@ -262,6 +298,8 @@ class Controller:
                 self.song.stop()
                 self.hot.stop()
                 self.test_until = self.clock.ticks_add(self.clock.ticks_ms(), 600)
+            elif operation == 'jog':
+                self.jog(command)
             elif operation == 'start':
                 self.start(command)
             else:

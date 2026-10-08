@@ -11,6 +11,8 @@ class Motion:
         self.count = count  # None means continuous
         self.brake_origin = None
         self.brake_speed = None
+        self.cruise_origin = 0
+        self.cruise_speed = self.initial
         self.executed = 0
         self.late_steps = 0
         self.max_lateness_us = 0
@@ -25,11 +27,24 @@ class Motion:
             if self.brake_origin is not None:
                 return max(self.initial, math.sqrt(max(self.initial ** 2, self.brake_speed ** 2 -
                            2 * self.acceleration * max(0, position - self.brake_origin))))
-            distance = position if self.count is None else min(position, self.count - position)
+            if self.count is None:
+                distance = max(0, position - self.cruise_origin)
+                if self.cruise_speed > self.target:
+                    return max(self.target, math.sqrt(max(self.target ** 2, self.cruise_speed ** 2 - 2 * self.acceleration * distance)))
+                return min(self.target, math.sqrt(self.cruise_speed ** 2 + 2 * self.acceleration * distance))
+            distance = min(position, self.count - position)
             return min(self.target, math.sqrt(self.initial ** 2 + 2 * self.acceleration * max(0, distance)))
         before, after = speed(index), speed(index + 1)
         self.rate = after
         return max(1, math.ceil(2000000 / (before + after)))
+
+    def retarget(self, target, acceleration, rate):
+        self.target, self.acceleration = target, acceleration
+        self.initial = min(10, target)
+        self.count = None
+        self.brake_origin = self.brake_speed = None
+        self.cruise_origin, self.cruise_speed = self.executed, rate
+        self.interval_us = self.interval(self.executed)
 
     def brake(self):
         """Convert continuous motion to a bounded deceleration tail, once."""

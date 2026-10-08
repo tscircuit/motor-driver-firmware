@@ -68,7 +68,7 @@ For a new board, add its composition module and select it with `--board`; do not
 | I2C1 SDA / SCL | 26 / 27 |
 | Buzzer | 16 |
 
-The DRV8847 profile allows 5–400 selected steps/sec and up to 100,000 steps per move. Full steps are 1.8°; half steps are 0.9°. Quarter steps require controllable intermediate winding currents and are not supported on this PCB. Half stepping alternates one/two energized coils without current normalization, so torque ripple and additional heating are possible. Step counts are commanded, not encoder measurements; alignment and missed steps affect actual position.
+The DRV8847 profile accepts any finite positive selected steps/sec and up to 100,000 steps per move. Full steps are 1.8°; half steps are 0.9°. Quarter steps require controllable intermediate winding currents and are not supported on this PCB. Half stepping alternates one/two energized coils without current normalization, so torque ripple and additional heating are possible. Step counts are commanded, not encoder measurements; alignment and missed steps affect actual position.
 
 There is no MCU measurement path for current or motor supply voltage on this board. The nominal hardware current trip is about 1 A; this is neither a measured current nor a validated continuous thermal rating. The encoder may remain disconnected.
 
@@ -107,7 +107,7 @@ Cloudflare DNS: `motorcontrol` is a DNS-only CNAME to `9009e8f2bfd94482.vercel-d
 
 Updated firmware accepts an optional `acceleration_sps2` on `start` (default 100, range 10–1000 selected increments/sec²). It energizes the retained phase for 100 ms, starts at at most 10 selected increments/sec, then follows a distance-based trapezoidal profile. Short finite moves use a triangular profile; finite moves decelerate before the last step and hold its phase for one final interval before releasing. Continuous moves ramp to the requested speed. Stop, disconnect, heartbeat loss and faults still release immediately; these are emergency stops, not deceleration requests.
 
-The RP2040 profile now advertises up to 400 selected increments/sec (120 nominal RPM in full steps, 60 in half steps). This is a software ceiling, **not a hardware-validated no-skip speed**. Start with 40 steps/sec and 100 steps/sec², then increase gradually with an unloaded motor. Initial alignment can move the shaft and is not counted as a commanded step.
+The RP2040 profile has no configured speed ceiling (`max_speed_sps: null`). Actual pulse throughput and motor capability still determine achieved movement. Initial alignment can move the shaft and is not counted as a commanded step.
 
 Scheduling uses microsecond deadlines and a 100 µs active-loop sleep instead of millisecond rounding and a 1 ms sleep. Late steps are never emitted in catch-up bursts. Late motion continues with one overdue step, rebasing the next deadline on actual output time; scheduler lateness does not stop the move. Telemetry reports `profile_speed_sps` (planned, not measured), `late_steps` (over 250 µs late) and `max_step_lateness_us`, reset per move. These counters measure scheduler lateness, not shaft skips.
 
@@ -148,11 +148,11 @@ adds the two-second pause after playback; it is not part of the audio asset.
 
 ## Two-board keyboard jogging
 
-Open `/gantry.html`, connect two different controllers as X and Y, then press an arrow key or hold an on-screen arrow; there is no enable toggle. Hold left/right for X and down/up for Y, or hold the on-screen arrows. Jogging uses half steps (0.9° on this board) and continuous acceleration to the chosen maximum. Default speed is 40 half steps/sec (5–100 allowed within board limits); default acceleration and deceleration are 100 half steps/sec² (10–1000 within board limits).
+Open `/gantry.html`, connect two different controllers as X and Y, then hold arrow keys or on-screen arrows. X and Y inputs run independently; combining horizontal and vertical arrows moves both axes. Opposite arrows on one axis cancel each other. The full/half selector chooses 1.8° or 0.9° increments. Speed accepts any finite positive value with no configured ceiling. Defaults are 150 selected steps/sec and 600 selected steps/sec²; acceleration remains 10–1000.
 
-Release requests firmware-controlled deceleration over a bounded step count before coils release. At the defaults, the tail is at most eight half steps plus USB/input latency. The firmware decelerates to its low starting rate, then releases; this is speed ramping, not winding-current fading. Wait for the axis to stop before changing direction. Space/Escape, the Stop button, focus loss, page hiding, stale telemetry, faults and connection loss stop immediately and clear the held key. Once both boards are healthy, a fresh arrow press can start another jog without rearming. Heartbeats continue during ordinary release deceleration. Motion never resumes automatically after a stop.
+Input dispatch happens immediately on press/release and is reconciled every 16 ms. Each axis has its own in-flight command, so a slow acknowledgement from X never blocks Y. The firmware `jog` command starts without the finite-move alignment dwell, resumes braking without releasing coils, and retargets speed while preserving the current ramp rate. Direction changes restart at the low starting rate immediately. Release decelerates only the released axis; another press need not wait for stopped telemetry. Space/Escape and explicit stops clear held input. Settings use selected increments; GOTO continues using half steps for exact saved coordinates.
 
-Both controllers must advertise half stepping and `deceleration_supported`. Upload updated `core/controller.py` and `core/motion.py` with the application stopped in maintenance mode. Existing names and alarm settings are preserved. Older firmware cannot use this page’s controls.
+Controllers must advertise `jog_update_supported`. Upload updated `core/controller.py`, `core/motion.py`, and `boards/rp2040_drv8847.py` in maintenance mode. Existing names and alarm settings are preserved.
 
 There are no travel limits, homing, or coordinated XY trajectories. Watch physical travel. Stop releases holding torque. Half stepping can increase heat because it alternates one and two energized coils. Current and position are not measured by this firmware.
 
