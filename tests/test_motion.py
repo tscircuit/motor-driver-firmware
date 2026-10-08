@@ -76,3 +76,12 @@ class MotionTests(unittest.TestCase):
             self.assertEqual(motion.rate, 0)
             if count == 60:
                 self.assertAlmostEqual(sum(periods), 800000, delta=count)
+
+    def test_fixed_ramp_crossings_and_fractional_braking_distance(self):
+        slow = Motion(Clock(), 0.5, 1.25, 10, None, 0, fixed_ramp=True)
+        self.assertAlmostEqual(slow.interval_us, 2200000, delta=1)
+        for speed in (0.5, 51, 151):
+            motion = Motion(Clock(), speed, speed / 0.4, 10, None, 0, fixed_ramp=True)
+            motion.rate = speed
+            tail = motion.brake()
+            self.assertAlmostEqual(sum(motion.interval(i) for i in range(tail)), 400000, delta=tail + 1)

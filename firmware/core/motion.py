@@ -47,6 +47,24 @@ class Motion:
                 return peak / self.acceleration + (position - ramp_distance) / peak
             self.rate = speed(index + 1)
             return max(1, math.ceil(1000000 * (time_at(index + 1) - time_at(index))))
+        if self.fixed_ramp:
+            if self.brake_origin is not None:
+                origin, initial, target = self.brake_origin, self.brake_speed, 0
+            else:
+                origin, initial, target = self.cruise_origin, self.cruise_speed, self.target
+            distance_to_target = abs(target ** 2 - initial ** 2) / (2 * self.acceleration)
+            def time_at(position):
+                distance = max(0, position - origin)
+                if not distance:
+                    return 0
+                if distance >= distance_to_target:
+                    ramp_time = abs(target - initial) / self.acceleration
+                    return ramp_time + ((distance - distance_to_target) / target if target else 0)
+                sign = 1 if target > initial else -1
+                end_speed = math.sqrt(max(0, initial ** 2 + sign * 2 * self.acceleration * distance))
+                return 2 * distance / (initial + end_speed)
+            self.rate = speed(index + 1)
+            return max(1, math.ceil(1000000 * (time_at(index + 1) - time_at(index))))
         before, after = speed(index), speed(index + 1)
         self.rate = after
         return max(1, math.ceil(2000000 / (before + after)))
