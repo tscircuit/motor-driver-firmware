@@ -38,3 +38,19 @@ class MotionTests(unittest.TestCase):
         motion = Motion(Clock(), 5, 100, 10, 2)
         self.assertEqual(motion.interval(0), 200000)
         self.assertEqual(motion.interval(1), 200000)
+
+    def test_braking_is_bounded_monotonic_and_idempotent(self):
+        for speed in (5, 10, 40, 100, 400):
+            clock = Clock()
+            motion = Motion(clock, speed, 100, 10, None)
+            for _ in range(1000):
+                clock.sleep_us(max(0, clock.ticks_diff(motion.deadline, clock.ticks_us())))
+                motion.advanced()
+            deadline = motion.deadline
+            tail = motion.brake()
+            self.assertLessEqual(tail, max(1, __import__('math').ceil(speed ** 2 / 200)))
+            self.assertEqual(motion.deadline, deadline)
+            self.assertEqual(motion.brake(), tail)
+            periods = [motion.interval(i) for i in range(motion.executed, motion.count)]
+            self.assertEqual(periods, sorted(periods))
+            self.assertLessEqual(motion.rate, min(speed, 10))

@@ -148,8 +148,12 @@ adds the two-second pause after playback; it is not part of the audio asset.
 
 ## Two-board keyboard jogging
 
-Open `/gantry.html`, connect two different controllers as X and Y, then enable arrow-key jogging. Hold left/right for X and down/up for Y; release stops both. Space, Escape, page hiding and loss of focus disable jogging and stop both boards. Changing speed or direction inversion also disables jogging. A disconnected, stale or faulted board disarms both axes.
+Open `/gantry.html`, connect two different controllers as X and Y, then enable jogging. Hold left/right for X and down/up for Y, or hold the on-screen arrows. Jogging uses half steps (0.9° on this board) and continuous acceleration to the chosen maximum. Default speed is 40 half steps/sec (5–100 allowed within board limits); default acceleration and deceleration are 100 half steps/sec² (10–1000 within board limits).
 
-The UI commands repeated four-full-step moves at 20 steps/sec by default (5–40 allowed), with acceleration 100 when supported. It waits for motion and completion telemetry before sending another move. One arrow direction is active at a time. These are independent jogs, not synchronized XY trajectories. No limit switches, homing or calibrated travel limits are provided. Watch the physical travel; USB and host scheduling add stop latency. Coils release when stopped.
+Release requests firmware-controlled deceleration over a bounded step count before coils release. At the defaults, the tail is at most eight half steps plus USB/input latency. The firmware decelerates to its low starting rate, then releases; this is speed ramping, not winding-current fading. Wait for the axis to stop before changing direction. Space/Escape, the Stop button, focus loss, page hiding, stale telemetry, faults and connection loss stop immediately and disable jogging. Heartbeats continue during ordinary release deceleration. Motion never resumes automatically after a stop.
 
-Run `node tests/test_gantry.cjs` for keyboard-controller safety tests. Physical gantry validation remains necessary before use.
+Both controllers must advertise half stepping and `deceleration_supported`. Upload updated `core/controller.py` and `core/motion.py` with the application stopped in maintenance mode. Existing names and alarm settings are preserved. Older firmware cannot enable this page’s controls.
+
+There are no travel limits, homing, or coordinated XY trajectories. Watch physical travel. Stop releases holding torque. Half stepping can increase heat because it alternates one and two energized coils. Current and position are not measured by this firmware.
+
+Run `node tests/test_gantry.cjs` and `python3 -m unittest discover -s tests` for controller regression tests. Physical gantry validation remains necessary before use.

@@ -34,6 +34,59 @@ class ControllerTests(unittest.TestCase):
         args.update(values)
         return self.send('start', **args)
 
+    def test_release_decelerates_then_stops_and_never_extends_tail(self):
+        self.assertTrue(self.start(mode='continuous')['ok'])
+        for _ in range(1000):
+            self.send('heartbeat')
+            self.platform.clock.sleep_us(1000)
+            self.controller.tick()
+        before = self.controller.executed
+        self.assertTrue(self.send('decelerate')['ok'])
+        self.assertEqual(self.controller.mode, 'braking')
+        tail = self.controller.remaining
+        self.assertGreater(tail, 0)
+        self.assertLessEqual(tail, 8)
+        self.send('decelerate')
+        self.assertEqual(self.controller.remaining, tail)
+        rates = []
+        for _ in range(2000):
+            self.send('heartbeat')
+            self.platform.clock.sleep_us(1000)
+            self.controller.tick()
+            rates.append(self.controller.status()['profile_speed_sps'])
+            if self.controller.mode == 'stopped':
+                break
+        self.assertEqual(rates, sorted(rates, reverse=True))
+        self.assertFalse(self.board.motor.enabled)
+        self.assertEqual(self.controller.executed, before + tail)
+        self.assertEqual(self.controller.stop_reason, 'Jog release complete')
+        self.assertTrue(self.send('decelerate')['ok'])
+        self.assertFalse(self.board.motor.enabled)
+
+    def test_braking_keeps_emergency_and_fault_stops_immediate(self):
+        for fault in ('stop', 'driver', 'thermal', 'sensor', 'heartbeat'):
+            self.send('stop')
+            self.board.motor.fault = False
+            self.board.temp = 25
+            self.assertTrue(self.start(mode='continuous')['ok'])
+            self.send('decelerate')
+            before = self.controller.executed
+            if fault == 'stop':
+                self.send('stop')
+            elif fault == 'driver':
+                self.board.motor.fault = True
+            elif fault == 'thermal':
+                self.board.temp = 75
+                self.controller.sample()
+            elif fault == 'sensor':
+                self.board.temp = OSError('Sensor unavailable')
+                self.controller.sample()
+            else:
+                self.platform.clock.sleep_ms(1501)
+            self.controller.tick()
+            self.assertFalse(self.board.motor.enabled, fault)
+            self.assertEqual(self.controller.executed, before, fault)
+
     def test_hot_speech_settings_alarm_and_motor_protection(self):
         from test_hot_alert import Speech
         from core.hot_alert import HotAlert
