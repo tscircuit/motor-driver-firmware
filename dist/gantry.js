@@ -1,26 +1,48 @@
 'use strict';
 const keys={ArrowLeft:['X',-1],ArrowRight:['X',1],ArrowDown:['Y',-1],ArrowUp:['Y',1]};
 class Jogger {
- constructor(axes,report,clock=()=>Date.now()){this.axes=axes;this.report=report;this.clock=clock;this.armed=false;this.key=null;this.active=null;this.phase='idle';this.moving=false;this.started=0;this.released=0;this.generation=0;}
- ready(){return Object.values(this.axes).every(a=>a.port&&a.last&&this.clock()-a.seen<1000&&a.last.protocol===3&&a.last.capabilities?.resolutions?.half===2&&a.last.capabilities?.deceleration_supported&&!a.last.sensor_error&&!a.last.driver_fault_asserted&&!a.last.thermal_alert&&!a.last.alarm_active&&!a.last.restarting&&Number.isFinite(a.last.temperature_c)&&a.last.temperature_c<(a.last.capabilities?.start_below_c??60));}
- press(key){if(!keys[key]||!this.armed||this.key||this.active)return false;this.key=key;return true;}
- async stop(){this.armed=false;this.key=null;this.active=null;this.phase='idle';this.moving=false;this.generation++;await Promise.all(Object.values(this.axes).map(a=>a.port?a.send('stop').catch(e=>this.report('Stop not acknowledged: '+e.message)):null));}
+ constructor(axes,report,clock=()=>Date.now()){this.axes=axes;this.report=report;this.clock=clock;this.key=null;this.active=null;this.phase='idle';this.moving=false;this.stopsPending=0;this.brakeConfirmed=false;this.started=0;this.released=0;this.generation=0;}
+ unavailableReason(){
+  for(const [label,a] of Object.entries(this.axes)){
+   if(!a.port||!a.last)return `${label}: connect the board first.`;
+   if(this.clock()-a.seen>=1000)return `${label}: waiting for fresh telemetry.`;
+   if(a.last.protocol!==3||a.last.capabilities?.resolutions?.half!==2||!a.last.capabilities?.deceleration_supported)return `${label}: update the half-step braking firmware.`;
+   if(a.last.sensor_error)return `${label}: temperature sensor fault.`;
+   if(a.last.driver_fault_asserted)return `${label}: driver fault.`;
+   if(a.last.thermal_alert||a.last.alarm_active||!Number.isFinite(a.last.temperature_c)||a.last.temperature_c>=(a.last.capabilities?.start_below_c??60))return `${label}: temperature protection is active.`;
+   if(a.last.restarting)return `${label}: board is restarting.`;
+  }
+  return null;
+ }
+ ready(){return this.unavailableReason()===null;}
+ press(key){
+  if(!keys[key]||this.key||this.active)return false;
+  if(this.stopsPending){this.report('Finishing the previous stop; press again when ready.');return false;}
+  const reason=this.unavailableReason();if(reason){this.report(reason);return false;}
+  this.key=key;this.report('Hold the arrow to jog; release to slow down.');return true;
+ }
+ async stop(reason=''){
+  this.key=null;this.active=null;this.phase='idle';this.moving=false;this.brakeConfirmed=false;this.generation++;this.stopsPending++;
+  if(reason)this.report(reason);
+  try{await Promise.all(Object.values(this.axes).map(a=>a.port?a.send('stop').then(()=>a.send('status')).catch(e=>this.report('Stop not acknowledged: '+e.message)):null));}
+  finally{this.stopsPending--;}
+ }
  async release(key){
   if(this.key!==key)return;
   this.key=null;this.released=this.clock();
   if(!this.active)return;
-  this.phase='braking';
-  try{await this.axes[this.active].send('decelerate');}
+  this.phase='braking';this.brakeConfirmed=false;const generation=this.generation,a=this.axes[this.active];
+  try{await a.send('decelerate');await a.send('status');if(generation===this.generation)this.brakeConfirmed=true;}
   catch(e){this.report(e.message);await this.stop();}
  }
  async tick(speed,invert,acceleration=100){
-  if(!this.armed)return;
-  if(!this.ready()){this.report('Fresh half-step/braking firmware and healthy telemetry are required; jogging disabled.');await this.stop();return;}
+  if(this.stopsPending||(!this.key&&!this.active))return;
+  if(!this.ready()){await this.stop(this.unavailableReason());return;}
   if(this.active){
    const a=this.axes[this.active];
    if(a.last.motor_enabled){this.moving=true;if(this.phase!=='braking')this.phase='running';}
-   else if(this.phase==='braking'&&a.last.stop_reason==='Jog release complete'&&a.seen>=this.released){this.active=null;this.phase='idle';this.moving=false;}
-   else if(this.moving){this.report('Board stopped: '+a.last.stop_reason);await this.stop();return;}
+   else if(this.phase==='braking'&&this.brakeConfirmed&&a.last.stop_reason==='Jog release complete'&&a.seen>=this.released){this.active=null;this.phase='idle';this.moving=false;}
+   else if(this.moving&&this.phase!=='braking'){this.report('Board stopped: '+a.last.stop_reason);await this.stop();return;}
    if(this.active&&((this.phase==='starting'&&this.clock()-this.started>3000)||(this.phase==='braking'&&this.clock()-this.released>this.brakeTimeout))){this.report('Jog transition timed out.');await this.stop();}
    return;
   }
@@ -31,7 +53,7 @@ class Jogger {
   this.active=axis;this.phase='starting';this.moving=false;this.started=this.clock();this.brakeTimeout=3000+speed/acceleration*1000;const generation=this.generation;
   try{
    await a.send('heartbeat',{},false);
-   if(generation!==this.generation||this.key!==key||!this.armed){if(generation===this.generation){this.active=null;this.phase='idle';}return;}
+   if(generation!==this.generation||this.key!==key){if(generation===this.generation){this.active=null;this.phase='idle';}return;}
    await a.send('start',{mode:'continuous',resolution:'half',direction:sign*(invert[axis]?-1:1),speed_sps:speed,acceleration_sps2:acceleration});
   }catch(e){this.report(e.message);await this.stop();}
  }
@@ -52,17 +74,16 @@ if(typeof document!=='undefined'){
   $('connect'+label).onclick=async()=>{if(axes[label].port){await jog.stop();await axes[label].close();}else await axes[label].connect();};
   $('rename'+label).onclick=async()=>{await jog.stop();const name=$('name'+label).value.trim();if(!/^[\x20-\x7e]{1,32}$/.test(name)){report('Use 1–32 printable ASCII characters.');return;}try{const ack=await axes[label].send('set_device_name',{name});report('Saved '+ack.device_name+'. Reconnect using the new USB name.');await axes[label].close();}catch(e){report(e.message);}};
  }
- $('armed').onchange=()=>{if($('armed').checked&&jog.ready()&&Object.values(axes).every(a=>!a.last.motor_enabled)){jog.armed=true;report('Half-step jogging enabled. Hold an arrow to accelerate; release to slow down.');}else void jog.stop();};
- $('stopAll').onclick=()=>{void jog.stop();report('Stopped both axes. Jogging disabled.');};
+ $('stopAll').onclick=()=>void jog.stop('Stopped. Press a fresh arrow key to jog again.');
  const editing=e=>['SELECT','TEXTAREA'].includes(e.target.tagName)||(e.target.tagName==='INPUT'&&e.target.type!=='checkbox')||e.target.isContentEditable;
- document.addEventListener('focusin',e=>{if(editing(e))void jog.stop();});
+ document.addEventListener('focusin',e=>{if(editing(e)&&(jog.key||jog.active))void jog.stop('Paused while editing settings. Press an arrow after editing to jog.');});
  document.addEventListener('keydown',e=>{if(e.key==='Escape'||(e.code==='Space'&&!editing(e))){e.preventDefault();void jog.stop();return;}if(!keys[e.key]||(['SELECT','TEXTAREA'].includes(e.target.tagName)||(e.target.tagName==='INPUT'&&e.target.type!=='checkbox'))||e.target.isContentEditable)return;e.preventDefault();if(e.repeat)return;jog.press(e.key);});
  document.addEventListener('keyup',e=>{if(keys[e.key]){e.preventDefault();void jog.release(e.key);}});
- window.addEventListener('blur',()=>void jog.stop());window.addEventListener('pagehide',()=>void jog.stop());document.addEventListener('visibilitychange',()=>{if(document.hidden)void jog.stop();});
- for(const id of ['jogSpeed','jogAcceleration','invertX','invertY'])$(id).onchange=()=>void jog.stop();
+ window.addEventListener('blur',()=>void jog.stop('Paused because the page lost focus. Press an arrow when you return.'));window.addEventListener('pagehide',()=>void jog.stop());document.addEventListener('visibilitychange',()=>{if(document.hidden)void jog.stop('Paused because the page is hidden. Press an arrow when you return.');});
+ for(const id of ['jogSpeed','jogAcceleration','invertX','invertY'])$(id).onchange=()=>void jog.stop('Settings changed. Press an arrow to jog with the new settings.');
  let ticking=false;setInterval(async()=>{if(ticking)return;ticking=true;try{await jog.tick(Number($('jogSpeed').value),{X:$('invertX').checked,Y:$('invertY').checked},Number($('jogAcceleration').value));}finally{ticking=false;}},50);
- setInterval(()=>{for(const a of Object.values(axes))if(a.port&&jog.armed&&(jog.key||jog.active)&&!document.hidden&&Date.now()-a.seen<1000)void a.send('heartbeat',{},false);},400);
+ setInterval(()=>{for(const a of Object.values(axes))if(a.port&&(jog.key||jog.active)&&!document.hidden&&Date.now()-a.seen<1000)void a.send('heartbeat',{},false);},400);
  for(const button of document.querySelectorAll('[data-arrow]')){button.addEventListener('pointerdown',e=>{e.preventDefault();if(jog.press(button.dataset.arrow))button.setPointerCapture(e.pointerId);});button.addEventListener('pointerup',()=>void jog.release(button.dataset.arrow));button.addEventListener('pointercancel',()=>void jog.stop());button.addEventListener('lostpointercapture',()=>void jog.release(button.dataset.arrow));}
- setInterval(()=>{for(const button of document.querySelectorAll('[data-arrow]')){button.disabled=!jog.armed;button.classList.toggle('engaged',jog.key===button.dataset.arrow);button.classList.toggle('coasting',jog.phase==='braking'&&keys[button.dataset.arrow][0]===jog.active);}$('jogPhase').textContent=jog.phase==='braking'?'Slowing down…':jog.active?'Accelerating / jogging':jog.armed?'Ready · hold an arrow':'Jogging disabled';$('brakeEstimate').textContent=`Release can add up to ${Math.max(1,Math.ceil(Number($('jogSpeed').value)**2/(2*Number($('jogAcceleration').value))))} half steps of deceleration, plus USB/input latency. Space/Escape stops immediately.`;$('armed').disabled=!jog.ready();$('armed').checked=jog.armed;for(const label of ['X','Y']){const a=axes[label];$('connect'+label).textContent=a.port?'Disconnect '+label:'Connect '+label;$('rename'+label).disabled=!a.port||Date.now()-a.seen>1000||!a.last?.usb_name_supported||a.last?.motor_enabled;}},100);
+ setInterval(()=>{for(const button of document.querySelectorAll('[data-arrow]')){button.disabled=!jog.ready()||jog.stopsPending>0;button.classList.toggle('engaged',jog.key===button.dataset.arrow);button.classList.toggle('coasting',jog.phase==='braking'&&keys[button.dataset.arrow][0]===jog.active);}$('jogPhase').textContent=jog.phase==='braking'?'Slowing down…':jog.active?'Accelerating / jogging':jog.stopsPending?'Stopping…':jog.ready()?'Ready · press an arrow':jog.unavailableReason();$('brakeEstimate').textContent=`Release can add up to ${Math.max(1,Math.ceil(Number($('jogSpeed').value)**2/(2*Number($('jogAcceleration').value))))} half steps of deceleration, plus USB/input latency. Space/Escape stops immediately.`;for(const label of ['X','Y']){const a=axes[label];$('connect'+label).textContent=a.port?'Disconnect '+label:'Connect '+label;$('rename'+label).disabled=!a.port||Date.now()-a.seen>1000||!a.last?.usb_name_supported||a.last?.motor_enabled;}},100);
  if(!navigator.serial)report('Open in desktop Chrome or Edge with Web Serial support.');
 }
