@@ -15,4 +15,6 @@ jobs:
       - run: node --check dist/app.js
       - run: node tests/test_dashboard.cjs
       - run: node tests/test_song.cjs
+      - run: node --check dist/gantry.js
+      - run: node tests/test_gantry.cjs
       - run: python scripts/build_firmware.py

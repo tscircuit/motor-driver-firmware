@@ -145,3 +145,11 @@ The supplied sample was generated with OpenAI gpt-4o-mini-tts (Marin voice),
 saying “Hot! Hot! Hot!” with slow, distinct enunciation. The 2.55-second sample
 is filtered to 250–3800 Hz and resampled to 16 kHz before encoding. The firmware
 adds the two-second pause after playback; it is not part of the audio asset.
+
+## Two-board keyboard jogging
+
+Open `/gantry.html`, connect two different controllers as X and Y, then enable arrow-key jogging. Hold left/right for X and down/up for Y; release stops both. Space, Escape, page hiding and loss of focus disable jogging and stop both boards. Changing speed or direction inversion also disables jogging. A disconnected, stale or faulted board disarms both axes.
+
+The UI commands repeated four-full-step moves at 20 steps/sec by default (5–40 allowed), with acceleration 100 when supported. It waits for motion and completion telemetry before sending another move. One arrow direction is active at a time. These are independent jogs, not synchronized XY trajectories. No limit switches, homing or calibrated travel limits are provided. Watch the physical travel; USB and host scheduling add stop latency. Coils release when stopped.
+
+Run `node tests/test_gantry.cjs` for keyboard-controller safety tests. Physical gantry validation remains necessary before use.
