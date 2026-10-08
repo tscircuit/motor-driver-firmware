@@ -32,7 +32,7 @@ class MotionTests(unittest.TestCase):
         self.assertEqual(motion.late_steps, 1)
         self.assertEqual(motion.max_lateness_us, 1000)
         self.assertFalse(motion.due())
-        self.assertEqual(clock.ticks_diff(motion.deadline, clock.ticks_us()), motion.interval_us)
+        self.assertEqual(clock.ticks_diff(motion.deadline, clock.ticks_us()), motion.interval_us - 1000)
 
     def test_target_below_start_rate_is_respected(self):
         motion = Motion(Clock(), 5, 100, 10, 2)
@@ -85,3 +85,22 @@ class MotionTests(unittest.TestCase):
             motion.rate = speed
             tail = motion.brake()
             self.assertAlmostEqual(sum(motion.interval(i) for i in range(tail)), 400000, delta=tail + 1)
+
+    def test_repeated_small_delays_do_not_accumulate_in_pulse_phase(self):
+        clock = Clock()
+        motion = Motion(clock, 150, 375, 10, None, 0, fixed_ramp=True)
+        planned = motion.deadline
+        for _ in range(100):
+            clock.sleep_us(clock.ticks_diff(motion.deadline, clock.ticks_us()) + 100)
+            motion.advanced()
+            planned = clock.ticks_add(planned, motion.interval_us)
+            self.assertEqual(motion.deadline, planned)
+
+    def test_scaled_axes_finish_together_on_long_and_short_moves(self):
+        for longest, shortest, speed in ((120, 30, 300), (23, 10, 40), (13, 2, 300)):
+            durations = []
+            for count in (longest, shortest):
+                axis_speed = speed * count / longest
+                motion = Motion(Clock(), axis_speed, axis_speed / .4, 10, count, 0, fixed_ramp=True)
+                durations.append(sum(motion.interval(i) for i in range(count)))
+            self.assertAlmostEqual(durations[0], durations[1], delta=longest + shortest)

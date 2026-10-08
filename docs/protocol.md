@@ -70,3 +70,9 @@ The RP2040 profile reports `min_speed_sps: 0`, `max_speed_sps: null`: speeds mus
 ## Fixed gantry ramps
 
 `fixed_ramp_ms: 400` advertises support for `ramp_ms: 400` on `jog` and `start`. The gantry sends this fixed value and does not expose acceleration customization. Acceleration is derived as `speed_sps / 0.4`, without the legacy acceleration ceiling. These profiles begin and end at zero speed, omit the alignment/final-phase timing dwells, and support single-step triangular moves. Short moves and release before reaching full speed use the corresponding shorter partial ramp; step quantization and scheduling latency affect physical timing. Other ramp durations are rejected. Explicit Stop remains immediate.
+
+## Prepared coordinated moves
+
+`deferred_start_supported: true` enables `start` with `mode: "steps"`, `defer: true`. It validates and prepares the finite profile, energizes the retained motor phase, and reports `motion_mode: "prepared"` without stepping. `run_move` starts its timing from receipt; Stop or faults cancel preparation. Clients prepare both axes before dispatching both run commands.
+
+Automatic moving telemetry has `compact: true` and omits static capabilities/identity; merge it into the last full snapshot. Full `status` replies and completion frames replace that snapshot. Continuous status polling during motion is unnecessary.

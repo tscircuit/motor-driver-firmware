@@ -96,7 +96,7 @@ class Controller:
                 'resolutions': self.motor.resolutions,
                 'full_steps_per_revolution': b.full_steps_per_revolution,
                 'min_speed_sps': b.min_speed_sps, 'max_speed_sps': b.max_speed_sps,
-                'acceleration_supported': True, 'deceleration_supported': True, 'jog_update_supported': True, 'fixed_ramp_ms': 400,
+                'acceleration_supported': True, 'deceleration_supported': True, 'jog_update_supported': True, 'fixed_ramp_ms': 400, 'deferred_start_supported': True,
                 'min_acceleration_sps2': getattr(b, 'min_acceleration_sps2', 10),
                 'max_acceleration_sps2': getattr(b, 'max_acceleration_sps2', 1000),
                 'default_acceleration_sps2': getattr(b, 'default_acceleration_sps2', 100),
@@ -106,7 +106,15 @@ class Controller:
                 'heartbeat_timeout_ms': b.heartbeat_timeout_ms,
                 'step_note': self.motor.step_note, 'current_note': b.current_note}
 
-    def status(self):
+    def status(self, compact=False):
+        if compact:
+            return {'type':'telemetry', 'compact':True, 'protocol':3, 'temperature_c':self.temperature,
+                    'motor_enabled':self.motor.enabled, 'motion_mode':self.mode,
+                    'sensor_error':self.sensor_error, 'alarm_active':self.alarm,
+                    'thermal_alert':self.board.thermal_alert(), 'driver_fault_asserted':self.motor.fault_asserted(),
+                    'profile_speed_sps':self.motion.rate if self.motion and self.mode not in ('stopped','prepared') else 0,
+                    'position_full_steps':self.position_full_steps, 'stop_reason':self.stop_reason}
+
         current = self.board.current_a()
         if current is not None and (isinstance(current, bool) or not isinstance(current, (int, float))
                                     or not math.isfinite(current) or current < 0):
@@ -153,6 +161,9 @@ class Controller:
         mode = command.get('mode')
         if mode not in ('steps', 'continuous'):
             raise ValueError('Unknown motion mode')
+        deferred = command.get('defer', False)
+        if not isinstance(deferred, bool) or (deferred and mode != 'steps'):
+            raise ValueError('Only finite moves can be prepared')
         direction = command.get('direction')
         if isinstance(direction, bool) or direction not in (-1, 1):
             raise ValueError('Direction must be -1 or 1')
@@ -184,7 +195,7 @@ class Controller:
         self.speed = speed
         self.remaining = int(count)
         self.executed = 0
-        self.mode = mode
+        self.mode = 'prepared' if deferred else mode
         self.stop_reason = ''
         self.acceleration = acceleration
         self.motion = Motion(self.clock, speed, acceleration, getattr(b, 'start_speed_sps', 10),
@@ -194,7 +205,7 @@ class Controller:
 
     def jog(self, command):
         """Update held-key intent without releasing coils or waiting for telemetry."""
-        if self.mode == 'steps':
+        if self.mode in ('steps', 'prepared'):
             raise ValueError('Stop finite movement before jogging')
         if self.mode == 'stopped':
             self.start(dict(command, mode='continuous'))
@@ -281,6 +292,11 @@ class Controller:
             elif operation == 'beep':
                 self.song.stop()
                 self.test_until = self.clock.ticks_add(self.clock.ticks_ms(), 600)
+            elif operation == 'run_move':
+                if self.mode != 'prepared':
+                    raise ValueError('No prepared move')
+                self.mode = 'steps'
+                self.motion.deadline = self.clock.ticks_add(self.clock.ticks_us(), self.motion.interval_us)
             elif operation == 'jog':
                 self.jog(command)
             elif operation == 'start':
@@ -314,7 +330,9 @@ class Controller:
         now = self.clock.ticks_ms()
         if self.mode in ('steps', 'braking') and self.remaining == 0 and self.motion.due():
             self.stop('Jog release complete' if self.mode == 'braking' else 'Step move complete')
-        if self.mode != 'stopped' and self.motion.due():
+            self.emit(self.status())
+            self.last_emit = now
+        if self.mode not in ('stopped', 'prepared') and self.motion.due():
             # Emit one overdue step and rebase the deadline on actual output
             # time. Lateness is diagnostic; it does not stop the move or burst.
             self.motor.step(self.direction)
@@ -345,7 +363,7 @@ class Controller:
             self.board.led.value(0)
             self.platform.reset()
         if self.clock.ticks_diff(now, self.last_emit) >= 250:
-            self.emit(self.status())
+            self.emit(self.status(compact=self.mode != 'stopped'))
             self.last_emit = now
 
     def close(self):

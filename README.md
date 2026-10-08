@@ -138,8 +138,14 @@ Scheduler lateness and slow jog transitions no longer trigger automatic motion s
 
 ## Three saved gantry positions
 
-The gantry page has three SAVE/GOTO rows. SAVE records both boards’ cumulative commanded positions while stopped, and stores the slots in this browser’s local storage. GOTO dispatches X and Y together in half steps at the selected target speed. It uses fixed 400 ms ramps from zero to full speed and from full speed to zero. Each axis accelerates, cruises if the distance allows, and decelerates independently; short moves use triangular ramps and may not reach the target speed. The axes can finish at different times. Arrow jogging is paused during GOTO; Stop/Space/Escape or focus loss cancels the return and stops both axes.
+The gantry page has three SAVE/GOTO rows. SAVE records both boards’ cumulative commanded positions while stopped, and stores the slots in this browser’s local storage. GOTO prepares both boards, then dispatches their starts together. The longer axis uses the selected target speed. It uses fixed 400 ms ramps from zero to full speed and from full speed to zero. Each axis accelerates, cruises if the distance allows, and decelerates independently; short moves use triangular ramps and may not reach the target speed. The shorter axis uses proportionally less speed so both have the same planned arrival time; actual arrival can differ by USB start latency and step timing. Arrow jogging is paused during GOTO; Stop/Space/Escape or focus loss cancels the return and stops both axes.
 
 Coordinates are counted from each controller run, not measured by an encoder. They include finite moves, continuous jogging and deceleration steps, and survive browser disconnects. Each controller run gets a random session ID. Firmware restart, reset or changing boards invalidates old slots; save again in the new session. Manual/back-driven movement, missed steps and initial alignment are not detected.
 
 Upload updated `core/controller.py` and `platforms/micropython.py` for cumulative position telemetry. Run `node tests/test_positions.cjs` to test saved targets, simultaneous returns, cancellation and session invalidation.
+
+## Smooth coordinated GOTO
+
+GOTO sends one prepared finite trajectory per board, then runs both after both preparation acknowledgements. It does not send Stop or repeated status queries during the return. Shorter-axis speed scales by its distance divided by the longer-axis distance; 400 ms ramp scaling gives a common planned duration. Firmware pushes compact telemetry during motion and a full completion frame after stopping.
+
+Pulse deadlines preserve their planned phase through small scheduling delays, and only rebase after a whole missed period. Fixed profiles cache their constants and avoid per-step function allocations; the active loop sleep is 25 microseconds. Start-temperature checks apply before starting; ongoing motion follows the board's run-time thermal/fault checks, and a tone alarm alone does not stop a move.

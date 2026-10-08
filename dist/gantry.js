@@ -13,7 +13,7 @@ class Jogger {
    if(a.last.protocol!==3||a.last.capabilities?.resolutions?.half!==2||a.last.capabilities?.fixed_ramp_ms!==400)return `${label}: update the fixed 400 ms ramp firmware.`;
    if(a.last.sensor_error)return `${label}: temperature sensor fault.`;
    if(a.last.driver_fault_asserted)return `${label}: driver fault.`;
-   if(a.last.thermal_alert||a.last.alarm_active||!Number.isFinite(a.last.temperature_c)||a.last.temperature_c>=(a.last.capabilities?.start_below_c??60))return `${label}: temperature protection is active.`;
+   if(a.last.thermal_alert||!Number.isFinite(a.last.temperature_c)||a.last.temperature_c>=(a.last.capabilities?.shutdown_c??75))return `${label}: temperature protection is active.`;
    if(a.last.restarting)return `${label}: board is restarting.`;
   }
   return null;
@@ -22,6 +22,8 @@ class Jogger {
  press(key){
   if(!keys[key]||this.held.has(key)||this.returning)return false;
   const reason=this.unavailableReason();if(reason){this.report(reason);return false;}
+  const axis=keys[key][0],a=this.axes[axis];
+  if(!a.last.motor_enabled&&a.last.temperature_c>=(a.last.capabilities?.start_below_c??60)){this.report(axis+': waiting for the board to cool before starting.');return false;}
   this.held.add(key);this.update();return true;
  }
  async stop(reason=''){
@@ -78,9 +80,9 @@ class PositionSlots {
  async goto(index,speed){
   if(!this.idle()||!this.valid(index)){this.report('Save a position in this board session and stop both axes before GOTO.');return false;}
   this.busy=true;this.slot=index;
-  const preparation=this.jog.stop();const generation=this.jog.generation;this.jog.returning=true;
+  const generation=++this.jog.generation;this.jog.returning=true;
   try{
-   await preparation;if(generation!==this.jog.generation)return false;
+   if(generation!==this.jog.generation)return false;
    if(!this.valid(index))throw Error('Board coordinates changed. Save the position again.');
    const plan=Object.entries(this.axes).map(([axis,a])=>{
     const c=a.last.capabilities,delta=(this.slots[index][axis].position-a.last.position_full_steps)*2;
@@ -89,20 +91,30 @@ class PositionSlots {
     return {axis,a,delta};
    });
    const moving=plan.filter(({delta})=>delta!==0);
+   if(moving.some(({a})=>a.last.temperature_c>=(a.last.capabilities.start_below_c??60)))throw Error('Wait for the boards to cool before starting GOTO.');
+   if(moving.some(({a})=>!a.last.capabilities.deferred_start_supported))throw Error('Update both boards for coordinated GOTO.');
+   const longest=Math.max(1,...moving.map(({delta})=>Math.abs(delta)));
+   for(const move of moving)move.speed=speed*Math.abs(move.delta)/longest;
    this.report(`GOTO ${index+1}: moving both axes…`);
    // Dispatch to independent USB queues together, before waiting for either axis.
-   await Promise.all(moving.map(async({a,delta})=>{
+   await Promise.all(moving.map(async({a,delta,speed})=>{
     await a.send('heartbeat',{},false);
     if(generation!==this.jog.generation)return;
     if(!this.valid(index))throw Error(this.jog.unavailableReason()||'Saved position reference is no longer valid.');
-    await a.send('start',{mode:'steps',resolution:'half',direction:Math.sign(delta),steps:Math.abs(delta),speed_sps:speed,ramp_ms:400});
+    await a.send('start',{mode:'steps',resolution:'half',direction:Math.sign(delta),steps:Math.abs(delta),speed_sps:speed,ramp_ms:400,defer:true});
    }));
    if(generation!==this.jog.generation)return false;
+   await Promise.all(moving.map(async({a})=>{
+    if(generation!==this.jog.generation)return;
+    await a.send('run_move');
+   }));
+   if(generation!==this.jog.generation)return false;
+   // One fresh snapshot establishes that each prepared move has started.
+   await Promise.all(moving.map(({a})=>a.send('status')));
    const pending=new Set(moving);
    while(pending.size){
     await Promise.all([...pending].map(async(move)=>{
      const {axis,a}=move;
-     await a.send('status');
      if(generation!==this.jog.generation)return;
      if(!this.valid(index))throw Error(this.jog.unavailableReason()||'Saved position reference is no longer valid.');
      if(!a.last.motor_enabled){
@@ -125,7 +137,7 @@ if(typeof document!=='undefined'){
  class Axis {
   constructor(label){this.label=label;this.port=null;this.last=null;this.seen=0;this.pending=new Map();this.nextId=1;this.chain=Promise.resolve();this.closing=false;}
   send(cmd,fields={},ack=true){if(!this.port?.writable)return Promise.reject(Error(this.label+' disconnected'));const target=this.port,id=this.nextId++;let result=Promise.resolve();if(ack)result=new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(Error(this.label+' command timed out'));},1500);this.pending.set(id,{resolve,reject,timer});});this.chain=this.chain.catch(()=>{}).then(async()=>{const w=target.writable.getWriter();try{await w.write(new TextEncoder().encode(JSON.stringify({cmd,id,...fields})+'\n'));}finally{w.releaseLock();}}).catch(e=>{const p=this.pending.get(id);if(p){clearTimeout(p.timer);this.pending.delete(id);p.reject(e);}else report(e.message);});return ack?result:this.chain;}
-  receive(line){let d;try{d=JSON.parse(line);}catch{return;}if(d.type==='ack'){const p=this.pending.get(d.id);if(p){clearTimeout(p.timer);this.pending.delete(d.id);d.ok?p.resolve(d):p.reject(Error(d.error||'Rejected'));}}else if(d.type==='telemetry'){this.last=d;this.seen=Date.now();$('status'+this.label).textContent=`${d.device_name} · ${d.device_id}\n${d.temperature_c??'—'} °C · ${d.motion_mode==='braking'?'Slowing down':d.motor_enabled?'Moving':'Stopped'} · ${Number(d.profile_speed_sps||0).toFixed(1)} ${d.step_resolution||'half'} steps/sec\n${d.sensor_error|| (d.driver_fault_asserted?'Driver fault':d.stop_reason)||''}${Number.isFinite(d.position_full_steps)?'\nPosition: '+(d.position_full_steps*2)+' half steps':''}`;}}
+  receive(line){let d;try{d=JSON.parse(line);}catch{return;}if(d.type==='ack'){const p=this.pending.get(d.id);if(p){clearTimeout(p.timer);this.pending.delete(d.id);d.ok?p.resolve(d):p.reject(Error(d.error||'Rejected'));}}else if(d.type==='telemetry'){if(d.compact)d={...this.last,...d};this.last=d;this.seen=Date.now();$('status'+this.label).textContent=`${d.device_name} · ${d.device_id}\n${d.temperature_c??'—'} °C · ${d.motion_mode==='braking'?'Slowing down':d.motor_enabled?'Moving':'Stopped'} · ${Number(d.profile_speed_sps||0).toFixed(1)} ${d.step_resolution||'half'} steps/sec\n${d.sensor_error|| (d.driver_fault_asserted?'Driver fault':d.stop_reason)||''}${Number.isFinite(d.position_full_steps)?'\nPosition: '+(d.position_full_steps*2)+' half steps':''}`;}}
   async connect(){await jog.stop();try{const port=await navigator.serial.requestPort();if(Object.values(axes).some(a=>a.port===port))throw Error('Choose a different board for each axis.');await port.open({baudRate:115200});this.port=port;this.last=null;this.seen=0;await port.setSignals({dataTerminalReady:true,requestToSend:false});this.reader=port.readable.getReader();this.reading=this.read();await this.send('stop');await this.send('status');report('Connected '+this.label+'.');}catch(e){report(e.message);await this.close();}}
   async read(){let buffer='';const decoder=new TextDecoder();try{while(this.port){const {value,done}=await this.reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let i;while((i=buffer.indexOf('\n'))>=0){this.receive(buffer.slice(0,i));buffer=buffer.slice(i+1);}if(buffer.length>8192)buffer='';}}catch(e){if(!this.closing)report(e.message);}finally{this.reader.releaseLock();this.reader=null;if(!this.closing){void jog.stop();void this.close();}}}
   async close(){if(this.closing)return;this.closing=true;try{if(this.reader)await this.reader.cancel();if(this.reading)await this.reading;await this.chain.catch(()=>{});if(this.port)await this.port.close();}catch{}finally{this.port=null;this.last=null;this.seen=0;this.closing=false;for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(Error('Disconnected'));}this.pending.clear();$('status'+this.label).textContent='Disconnected';}}

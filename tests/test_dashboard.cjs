@@ -39,3 +39,8 @@ console.log('PASS song capability, file selection and alarm gating');
 
 assert.equal(elements.has('hotAlert'),false);
 console.log('PASS tone-only dashboard has no speech controls');
+
+context.packet=JSON.stringify({...telemetry,capabilities:{max_speed_sps:null,acceleration_supported:true}});run('receive(packet)');
+context.packet=JSON.stringify({type:'telemetry',compact:true,protocol:3,temperature_c:32,motor_enabled:true});run('receive(packet)');
+assert.equal(element('speed').max,'');assert.equal(element('deviceIdentity').textContent,'<Left motor> · test123');
+console.log('PASS compact motion telemetry preserves board capabilities and identity');
