@@ -17,7 +17,7 @@ def build(board, destination):
         raise ValueError('Output must be outside the firmware source tree')
     if destination.exists() and any(destination.iterdir()):
         raise ValueError('Output directory must be empty; choose a new directory')
-    for file in list(source.rglob('*.py')) + list((source / 'assets').glob('*.pdm')):
+    for file in source.rglob('*.py'):
         target = destination / file.relative_to(source)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(file, target)

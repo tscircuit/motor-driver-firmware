@@ -3,13 +3,12 @@ const $=id=>document.getElementById(id);
 let port=null,reader=null,reading=null,connecting=false,closing=false,last=null,lastSeen=0,nextId=1;
 let loadedSong=null,songBusy=false,songFileVersion=0;
 let capabilityKey='';
-let hotDirty=false,hotBusy=false;
 const defaults={resolutions:{full:1,half:2},full_steps_per_revolution:200,min_speed_sps:5,max_speed_sps:100,max_steps:100000,threshold_min_c:10,threshold_max_c:74,shutdown_c:75,heartbeat_timeout_ms:1500,buzzer_hz:2731};
 const caps=()=>({...defaults,...(last?.capabilities||{})});
 let nameDirty=false,renaming=false,restartNotice=null;
 let points=[],pending=new Map(),dirty=false,writeChain=Promise.resolve();
 const message=t=>{$('message').textContent=t;};
-function controls(){const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500;$('beep').disabled=!live||renaming;const songReady=live&&caps().song_supported&&!last?.motor_enabled&&!last?.alarm_active&&!last?.restarting&&!renaming&&!songBusy;const hotReady=live&&caps().hot_speech_supported&&!last?.motor_enabled&&!last?.restarting&&!renaming&&!hotBusy;$('hotAlert').disabled=!hotReady;$('saveHotAlert').disabled=!hotReady;$('testHotAlert').disabled=!hotReady||!!last?.alarm_active;$('playSong').disabled=!songReady||!loadedSong;$('demoSong').disabled=!songReady;$('stopSong').disabled=!live||!caps().song_supported;$('deviceName').disabled=!live||!last?.usb_name_supported||!!last?.motor_enabled||renaming;$('rename').disabled=$('deviceName').disabled;$('threshold').disabled=!live;$('apply').disabled=!live||!!last?.motor_enabled||renaming;for(const id of ['mode','resolution','direction','steps','speed','start'])$(id).disabled=!live||last?.protocol!==3||!!last?.motor_enabled||renaming||!!last?.restarting;$('acceleration').disabled=!live||!caps().acceleration_supported||!!last?.motor_enabled||renaming||!!last?.restarting;$('stop').disabled=!port;$('connect').disabled=connecting||renaming||closing;$('connect').textContent=port?'Disconnect':'Connect board ↗';}
+function controls(){const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500;$('beep').disabled=!live||renaming;const songReady=live&&caps().song_supported&&!last?.motor_enabled&&!last?.alarm_active&&!last?.restarting&&!renaming&&!songBusy;$('playSong').disabled=!songReady||!loadedSong;$('demoSong').disabled=!songReady;$('stopSong').disabled=!live||!caps().song_supported;$('deviceName').disabled=!live||!last?.usb_name_supported||!!last?.motor_enabled||renaming;$('rename').disabled=$('deviceName').disabled;$('threshold').disabled=!live;$('apply').disabled=!live||!!last?.motor_enabled||renaming;for(const id of ['mode','resolution','direction','steps','speed','start'])$(id).disabled=!live||last?.protocol!==3||!!last?.motor_enabled||renaming||!!last?.restarting;$('acceleration').disabled=!live||!caps().acceleration_supported||!!last?.motor_enabled||renaming||!!last?.restarting;$('stop').disabled=!port;$('connect').disabled=connecting||renaming||closing;$('connect').textContent=port?'Disconnect':'Connect board ↗';}
 function send(cmd,fields={}){
  if(!port||!port.writable)return Promise.reject(Error('Connect the board first.'));
  const id=nextId++;
@@ -64,7 +63,7 @@ async function readLoop(){let buffer='';const decoder=new TextDecoder();try{whil
 async function disconnect(){if(closing)return;closing=true;try{if(port&&[2,3].includes(last?.protocol)){try{await send('stop');}catch{}}if(reader)await reader.cancel();if(reading)await reading;await writeChain.catch(()=>{});if(port)await port.close();}catch{}finally{port=null;reading=null;lastSeen=0;closing=false;for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('Disconnected'));}pending.clear();$('state').textContent='Disconnected';$('connectionHint').textContent='Graph retained. Reconnect to resume live readings.';$('tempHint').textContent='Last reading · disconnected';$('motionState').textContent='Disconnected · automatic stop';$('motorStatus').textContent='Disconnected';controls();}}
 async function connect(){if(port)return disconnect();connecting=true;controls();try{
  const selected=await navigator.serial.requestPort();
- await selected.open({baudRate:115200});port=selected;lastSeen=0;last=null;points=[];dirty=false;hotDirty=false;nameDirty=false;renaming=false;restartNotice=null;
+ await selected.open({baudRate:115200});port=selected;lastSeen=0;last=null;points=[];dirty=false;nameDirty=false;renaming=false;restartNotice=null;
  await port.setSignals({dataTerminalReady:true,requestToSend:false});reader=port.readable.getReader();reading=readLoop();
  reading.then(()=>{if(!closing&&port)void disconnect();});
  $('state').textContent='Waiting for board';message('Connected. Waiting for telemetry…');
@@ -92,8 +91,6 @@ window.addEventListener('pagehide',()=>{if(port)void send('stop').catch(()=>{});
 
 function updateCapabilities(){
  const c=caps(),key=JSON.stringify(c);
- if(!hotDirty)$('hotAlert').value=last?.hot_alert_enabled?'on':'off';
- $('hotStatus').textContent=last?.hot_speech_error?`Speech unavailable: ${last.hot_speech_error}. Alarm uses chirps.`:!c.hot_speech_supported?'Update firmware to enable board speech.':last?.hot_speech_playing?'Speaking through the board buzzer…':last?.hot_alert_enabled?(last?.alarm_active?'Hot alert active · 2-second pauses':'Hot voice enabled · waiting for temperature alarm'):'Hot voice off · normal alarm chirps';
  $('songStatus').textContent=!c.song_supported?'Update firmware to enable songs.':last?.alarm_active?'Alarm active · songs interrupted':last?.song_playing?`Playing note ${last.song_note} · ${last.buzzer_frequency_hz||0} Hz`:'Song stopped';
  $('boardLabel').textContent=last?.board||'MOTOR CONTROLLER';
  $('timingStatus').textContent=c.acceleration_supported?`Ramped motion · profile ${Number(last?.profile_speed_sps||0).toFixed(1)} steps/sec · ${last?.late_steps||0} late steps · worst delay ${((last?.max_step_lateness_us||0)/1000).toFixed(2)} ms. Timing counters do not measure motor skips.`:'Install updated firmware for acceleration and higher speeds (older firmware retains its speed limit).';
@@ -156,15 +153,3 @@ $('demoSong').addEventListener('click',async()=>{
  catch(error){message(error.message);}
 });
 $('stopSong').addEventListener('click',async()=>{try{await send('stop_song');message('Song stopped. Temperature alarms remain enabled.');}catch(error){message(error.message);}});
-
-$('hotAlert').addEventListener('change',()=>{hotDirty=true;});
-$('saveHotAlert').addEventListener('click',async()=>{
- const enabled=$('hotAlert').value==='on';hotBusy=true;controls();
- try{const ack=await send('set_hot_alert',{enabled});hotDirty=false;if(last)last.hot_alert_enabled=ack.hot_alert_enabled;$('hotAlert').value=ack.hot_alert_enabled?'on':'off';message(ack.hot_alert_enabled?'Saved on board: HOT HOT HOT with 2-second pauses.':'Hot voice disabled. Normal temperature chirps remain enabled.');}
- catch(error){message(error.message);}finally{hotBusy=false;controls();}
-});
-$('testHotAlert').addEventListener('click',async()=>{
- hotBusy=true;controls();
- try{await send('test_hot_alert');message('Playing HOT HOT HOT once through the board buzzer.');}
- catch(error){message(error.message);}finally{hotBusy=false;controls();}
-});

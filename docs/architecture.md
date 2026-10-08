@@ -84,16 +84,3 @@ Preserve motor-disabled boot, explicit starts, bounded command input, heartbeat 
 Before calling a new target supported, test pin safe states, timing, fault polarity, sensor failures, current limits, watchdog reset, reconnect behavior, persisted settings, and USB enumeration on that hardware. Host tests establish software behavior, not electrical correctness or timing guarantees.
 
 Motion profile settings in a board may override `start_speed_sps`, `default_acceleration_sps2`, `min_acceleration_sps2`, `max_acceleration_sps2` and `settle_ms`. Defaults are 10, 100, 10, 1000 and 100 respectively. Clock microsecond tick operations must use the same wrap semantics as millisecond ticks.
-
-## Optional speech adapter
-
-A buzzer may expose `speech_supported`, `speech_error`, `speech_start()`,
-`speech_poll()` (true while playing), and `speech_stop()`. Completion must silence
-hardware; stop must be idempotent. The portable `HotAlert` owns repetition and
-fallback; only `platforms/rp2040_speech.py` imports PIO/DMA. Other MCUs keep the
-existing Tone adapter unless they supply their own implementation. Settings may
-add `load_hot_alert()` / `save_hot_alert(bool)`; absent load defaults to off.
-RP2040's board composition reserves PIO0 SM0 for speech. Reassign that ID in the
-board profile before adding an adapter which also uses PIO.
-
-Hardware API references: [MicroPython DMA](https://docs.micropython.org/en/v1.29.0/library/rp2.DMA.html) and [PIO state machines](https://docs.micropython.org/en/v1.29.0/library/rp2.StateMachine.html).

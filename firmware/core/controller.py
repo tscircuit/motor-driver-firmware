@@ -2,7 +2,6 @@
 import json
 import math
 from core.motion import Motion
-from core.hot_alert import HotAlert
 from core.song import Song, MAX_BYTES
 
 
@@ -43,7 +42,6 @@ class Controller:
                                                  board.threshold_min_c,
                                                  board.threshold_max_c)
         self.song = Song(self.clock)
-        self.hot = HotAlert(board.buzzer, self.clock, getattr(settings, "load_hot_alert", lambda: False)())
         self.buzzer_frequency = 0
         self.reset_at = None
         self.temperature = None
@@ -70,7 +68,6 @@ class Controller:
 
     def stop(self, reason):
         self.motor.disable()
-        self.hot.stop()
         self.song.stop()
         self.mode = 'stopped'
         self.stop_reason = reason
@@ -94,8 +91,7 @@ class Controller:
 
     def capabilities(self):
         b = self.board
-        return {'hot_speech_supported': self.hot.supported, 'hot_speech_pause_ms': 2000,
-                'song_supported': callable(getattr(b.buzzer, 'play', None)),
+        return {'song_supported': callable(getattr(b.buzzer, 'play', None)),
                 'song_format': 'u16le-hz-u16le-ms', 'song_max_bytes': MAX_BYTES,
                 'resolutions': self.motor.resolutions,
                 'full_steps_per_revolution': b.full_steps_per_revolution,
@@ -123,8 +119,6 @@ class Controller:
                 'restarting': self.reset_at is not None, 'led_on': self.led_on,
                 'led_mode': 'alarm' if self.alarm else 'running' if self.mode != 'stopped' else 'off',
                 'threshold_c': self.threshold, 'alarm_active': self.alarm,
-                'hot_alert_enabled': self.hot.enabled, 'hot_speech_playing': self.hot.playing,
-                'hot_speech_error': self.hot.error,
                 'buzzer_on': self.sounding, 'buzzer_frequency_hz': self.buzzer_frequency,
                 'song_playing': self.song.playing, 'song_note': self.song.index + 1 if self.song.playing else 0, 'sensor_error': self.sensor_error,
                 'thermal_alert': self.board.thermal_alert(),
@@ -185,7 +179,6 @@ class Controller:
             self.stop('Driver or thermal fault at wake')
             raise
         self.song.stop()
-        self.hot.stop()
         self.resolution = resolution
         self.direction = direction
         self.speed = speed
@@ -272,25 +265,6 @@ class Controller:
                 self.device_name = self.settings.save_name(command.get('name'))
                 self.stop('Restarting to apply USB name')
                 self.reset_at = self.clock.ticks_add(self.clock.ticks_ms(), 750)
-            elif operation == 'set_hot_alert':
-                if self.mode != 'stopped' or self.reset_at is not None:
-                    raise ValueError('Stop motor and wait for restart before saving settings')
-                enabled = command.get('enabled')
-                if not isinstance(enabled, bool):
-                    raise ValueError('enabled must be boolean')
-                if enabled and not self.hot.supported:
-                    raise ValueError('Speech unavailable on this board')
-                self.settings.save_hot_alert(enabled)
-                self.hot.configure(enabled)
-            elif operation == 'test_hot_alert':
-                if self.mode != 'stopped' or self.reset_at is not None:
-                    raise ValueError('Stop motor and wait for restart before testing speech')
-                self.sample()
-                if self.alarm:
-                    raise ValueError('Temperature alarm takes priority over preview')
-                self.song.stop()
-                self.test_until = self.clock.ticks_ms()
-                self.hot.preview()
             elif operation == 'play_song':
                 if self.mode != 'stopped' or self.reset_at is not None:
                     raise ValueError('Stop motor and wait for restart before playing a song')
@@ -300,15 +274,12 @@ class Controller:
                 if self.alarm:
                     raise ValueError('Temperature alarm takes priority over songs')
                 self.song.start(command.get('hex'))
-                self.hot.stop()
                 self.test_until = self.clock.ticks_ms()
             elif operation == 'stop_song':
                 self.song.stop()
-                self.hot.stop()
                 self.test_until = self.clock.ticks_ms()
             elif operation == 'beep':
                 self.song.stop()
-                self.hot.stop()
                 self.test_until = self.clock.ticks_add(self.clock.ticks_ms(), 600)
             elif operation == 'jog':
                 self.jog(command)
@@ -317,7 +288,7 @@ class Controller:
             else:
                 raise ValueError('Unknown command')
             self.emit({'type': 'ack', 'id': ident, 'ok': True, 'threshold_c': self.threshold,
-                       'device_name': self.device_name, 'hot_alert_enabled': self.hot.enabled,
+                       'device_name': self.device_name,
                        'restarting': self.reset_at is not None})
         except Exception as error:
             self.emit({'type': 'ack', 'id': ident, 'ok': False, 'error': str(error)})
@@ -360,12 +331,9 @@ class Controller:
             frequency = self.board.buzzer_hz if now % 1000 < 200 else 0
         elif self.clock.ticks_diff(self.test_until, now) > 0:
             frequency = self.board.buzzer_hz
-        speech_owns_buzzer = self.hot.tick(self.alarm, now)
-        self.buzzer_frequency = 0 if speech_owns_buzzer else frequency
-        self.sounding = self.hot.playing if speech_owns_buzzer else bool(frequency)
-        if speech_owns_buzzer:
-            pass
-        elif callable(getattr(self.board.buzzer, 'play', None)):
+        self.buzzer_frequency = frequency
+        self.sounding = bool(frequency)
+        if callable(getattr(self.board.buzzer, 'play', None)):
             self.board.buzzer.play(frequency)
         else:
             self.board.buzzer.set(self.sounding)

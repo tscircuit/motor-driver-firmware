@@ -1,7 +1,6 @@
 """The tested tscircuit RP2040 / DRV8847 PCB and its safety limits."""
-from platforms.micropython import Platform
+from platforms.micropython import Platform, Tone
 from drivers.drv8847 import DRV8847
-from platforms.rp2040_speech import SpeechTone
 from sensors.tmp102 import TMP102
 
 ENABLE = 22
@@ -51,7 +50,7 @@ class Board:
                             platform.input(FAULT), platform.clock)
         self.alert = platform.input(ALERT)
         self.led = platform.output(LED)
-        self.buzzer = SpeechTone(BUZZER, self.buzzer_hz)
+        self.buzzer = Tone(BUZZER, self.buzzer_hz)
         self.sensor = None
         try:
             sensor = TMP102(platform.i2c(1, SDA, SCL, 100000),

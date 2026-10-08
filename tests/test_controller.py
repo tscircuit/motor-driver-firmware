@@ -163,43 +163,28 @@ class ControllerTests(unittest.TestCase):
             self.assertFalse(self.board.motor.enabled, fault)
             self.assertEqual(self.controller.executed, before, fault)
 
-    def test_hot_speech_settings_alarm_and_motor_protection(self):
-        from test_hot_alert import Speech
-        from core.hot_alert import HotAlert
-        b = self.board.buzzer
-        speech = Speech()
-        for name in ('speech_start', 'speech_poll', 'speech_stop'):
-            setattr(b, name, getattr(speech, name))
-        b.speech_supported = True
-        self.controller.hot = HotAlert(b, self.platform.clock)
-        self.assertFalse(self.send('set_hot_alert', enabled=1)['ok'])
-        self.assertTrue(self.send('set_hot_alert', enabled=True)['ok'])
-        self.assertTrue(Settings().load_hot_alert())
-        self.assertTrue(self.send('test_hot_alert')['ok'])
-        self.controller.tick()
-        self.assertTrue(self.controller.status()['hot_speech_playing'])
-        self.assertTrue(self.send('stop_song')['ok'])
-        self.assertFalse(speech.active)
-        self.assertTrue(self.start(mode='continuous')['ok'])
+    def test_tone_only_buzzer_beep_expiry_and_alarm_priority(self):
+        # Legacy saved voice preferences cannot suppress PWM alerts.
+        with open('hot_alert.json', 'w') as file:
+            file.write('{"enabled":true}')
+        self.assertFalse(self.send('set_hot_alert', enabled=True)['ok'])
         self.assertFalse(self.send('test_hot_alert')['ok'])
-        self.assertFalse(self.send('set_hot_alert', enabled=False)['ok'])
+        self.assertNotIn('hot_speech_supported', self.controller.capabilities())
+        self.assertTrue(self.send('beep')['ok'])
+        self.controller.tick()
+        self.assertEqual(self.board.buzzer.frequency, self.board.buzzer_hz)
+        self.assertTrue(self.controller.status()['buzzer_on'])
+        self.platform.clock.sleep_ms(600)
+        self.controller.tick()
+        self.assertEqual(self.board.buzzer.frequency, 0)
         self.board.temp = 70
-        self.platform.clock.sleep_ms(100)
-        self.controller.tick()
-        self.assertTrue(self.controller.hot.playing)
-        self.assertTrue(self.board.motor.enabled)
-        self.board.temp = 75
-        self.platform.clock.sleep_ms(100)
-        self.controller.tick()
-        self.assertFalse(self.board.motor.enabled)
-        self.assertEqual(self.controller.stop_reason, 'Thermal shutdown')
-        self.assertTrue(self.send('set_hot_alert', enabled=False)['ok'])
-        self.assertFalse(Settings().load_hot_alert())
         self.platform.clock.now = 1000
         self.controller.tick()
-        self.assertEqual(self.controller.buzzer_frequency, self.board.buzzer_hz)
-        self.assertFalse(speech.active)
-        self.assertFalse(self.send('test_hot_alert')['ok'])
+        self.assertTrue(self.controller.alarm)
+        self.assertEqual(self.board.buzzer.frequency, self.board.buzzer_hz)
+        self.platform.clock.now = 1250
+        self.controller.tick()
+        self.assertEqual(self.board.buzzer.frequency, 0)
 
     def test_alternate_driver_and_mcu_finite_move(self):
         self.assertFalse(self.board.motor.enabled)
