@@ -26,7 +26,7 @@ function receive(line){
  if(!Number.isFinite(data.threshold_c))return;
  const t=data.temperature_c;if(t!==null&&!Number.isFinite(t))return;
  const now=Date.now();if(lastSeen&&now-lastSeen>2500)points.push({t:now-1,v:null});
- last=data;lastSeen=now;updateCapabilities();
+ last=data.compact?{...last,...data}:data;data=last;lastSeen=now;updateCapabilities();
  $('deviceIdentity').textContent=`${data.device_name||'MicroPython board'}${data.device_id?' · '+data.device_id:''}`;
  if(!nameDirty)$('deviceName').value=data.device_name||'';
  $('nameHint').textContent=data.usb_name_supported?'Saved on the board. Stop the motor first. After restart, reconnect using the new name.':'USB naming is unavailable on this platform or firmware installation.';

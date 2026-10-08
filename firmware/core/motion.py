@@ -18,54 +18,55 @@ class Motion:
         self.late_steps = 0
         self.max_lateness_us = 0
         self.rate = self.initial
+        if fixed_ramp and count is not None:
+            self.peak = min(target, math.sqrt(acceleration * count))
+            self.ramp_distance = self.peak ** 2 / (2 * acceleration)
+            self.duration = 2 * self.peak / acceleration + (count - 2 * self.ramp_distance) / self.peak
         self.interval_us = self.interval(0)
         self.deadline = clock.ticks_add(clock.ticks_us(), settle_ms * 1000 + self.interval_us)
 
+    def speed_at(self, position):
+        if self.brake_origin is not None:
+            return max(self.initial, math.sqrt(max(self.initial ** 2, self.brake_speed ** 2 -
+                       2 * self.acceleration * max(0, position - self.brake_origin))))
+        if self.count is None:
+            distance = max(0, position - self.cruise_origin)
+            if self.cruise_speed > self.target:
+                return max(self.target, math.sqrt(max(self.target ** 2, self.cruise_speed ** 2 - 2 * self.acceleration * distance)))
+            return min(self.target, math.sqrt(self.cruise_speed ** 2 + 2 * self.acceleration * distance))
+        distance = min(position, self.count - position)
+        return min(self.target, math.sqrt(self.initial ** 2 + 2 * self.acceleration * max(0, distance)))
+
+    def time_at(self, position):
+        if self.count is not None and self.brake_origin is None:
+            if position <= self.ramp_distance:
+                return math.sqrt(2 * position / self.acceleration)
+            if position >= self.count - self.ramp_distance:
+                return self.duration - math.sqrt(max(0, 2 * (self.count - position) / self.acceleration))
+            return self.peak / self.acceleration + (position - self.ramp_distance) / self.peak
+        if self.brake_origin is not None:
+            origin, initial, target = self.brake_origin, self.brake_speed, 0
+        else:
+            origin, initial, target = self.cruise_origin, self.cruise_speed, self.target
+        distance = max(0, position - origin)
+        if not distance:
+            return 0
+        distance_to_target = abs(target ** 2 - initial ** 2) / (2 * self.acceleration)
+        if distance >= distance_to_target:
+            return abs(target - initial) / self.acceleration + ((distance - distance_to_target) / target if target else 0)
+        sign = 1 if target > initial else -1
+        end_speed = math.sqrt(max(0, initial ** 2 + sign * 2 * self.acceleration * distance))
+        return 2 * distance / (initial + end_speed)
+
     def interval(self, index):
-        # Speed at the boundaries of each unit-distance segment. Finite profiles
-        # are symmetric, including short triangular moves. Never round speed up.
-        def speed(position):
-            if self.brake_origin is not None:
-                return max(self.initial, math.sqrt(max(self.initial ** 2, self.brake_speed ** 2 -
-                           2 * self.acceleration * max(0, position - self.brake_origin))))
-            if self.count is None:
-                distance = max(0, position - self.cruise_origin)
-                if self.cruise_speed > self.target:
-                    return max(self.target, math.sqrt(max(self.target ** 2, self.cruise_speed ** 2 - 2 * self.acceleration * distance)))
-                return min(self.target, math.sqrt(self.cruise_speed ** 2 + 2 * self.acceleration * distance))
-            distance = min(position, self.count - position)
-            return min(self.target, math.sqrt(self.initial ** 2 + 2 * self.acceleration * max(0, distance)))
-        if self.fixed_ramp and self.count is not None and self.brake_origin is None:
-            peak = min(self.target, math.sqrt(self.acceleration * self.count))
-            ramp_distance = peak ** 2 / (2 * self.acceleration)
-            duration = 2 * peak / self.acceleration + (self.count - 2 * ramp_distance) / peak
-            def time_at(position):
-                if position <= ramp_distance:
-                    return math.sqrt(2 * position / self.acceleration)
-                if position >= self.count - ramp_distance:
-                    return duration - math.sqrt(max(0, 2 * (self.count - position) / self.acceleration))
-                return peak / self.acceleration + (position - ramp_distance) / peak
-            self.rate = speed(index + 1)
-            return max(1, math.ceil(1000000 * (time_at(index + 1) - time_at(index))))
+        # Methods and cached finite-profile constants avoid per-pulse closures/GC.
         if self.fixed_ramp:
-            if self.brake_origin is not None:
-                origin, initial, target = self.brake_origin, self.brake_speed, 0
-            else:
-                origin, initial, target = self.cruise_origin, self.cruise_speed, self.target
-            distance_to_target = abs(target ** 2 - initial ** 2) / (2 * self.acceleration)
-            def time_at(position):
-                distance = max(0, position - origin)
-                if not distance:
-                    return 0
-                if distance >= distance_to_target:
-                    ramp_time = abs(target - initial) / self.acceleration
-                    return ramp_time + ((distance - distance_to_target) / target if target else 0)
-                sign = 1 if target > initial else -1
-                end_speed = math.sqrt(max(0, initial ** 2 + sign * 2 * self.acceleration * distance))
-                return 2 * distance / (initial + end_speed)
-            self.rate = speed(index + 1)
-            return max(1, math.ceil(1000000 * (time_at(index + 1) - time_at(index))))
-        before, after = speed(index), speed(index + 1)
+            if self.count is not None and self.brake_origin is None and index >= self.ramp_distance and index + 1 <= self.count - self.ramp_distance:
+                self.rate = self.peak
+                return max(1, math.ceil(1000000 / self.peak))
+            self.rate = self.speed_at(index + 1)
+            return max(1, math.ceil(1000000 * (self.time_at(index + 1) - self.time_at(index))))
+        before, after = self.speed_at(index), self.speed_at(index + 1)
         self.rate = after
         return max(1, math.ceil(2000000 / (before + after)))
 
@@ -108,5 +109,7 @@ class Motion:
             self.deadline = self.clock.ticks_add(self.clock.ticks_us(), 0 if self.fixed_ramp else self.interval_us)
             return
         self.interval_us = self.interval(self.executed)
-        # Rebase on the actual output time. No catch-up bursts after USB/I2C/GC.
-        self.deadline = self.clock.ticks_add(self.clock.ticks_us(), self.interval_us)
+        # Preserve phase after small loop delays instead of accumulating them.
+        # A missed whole period still rebases, avoiding a catch-up pulse burst.
+        planned = self.clock.ticks_add(self.deadline, self.interval_us)
+        self.deadline = planned if self.clock.ticks_diff(planned, self.clock.ticks_us()) > 0 else self.clock.ticks_add(self.clock.ticks_us(), self.interval_us)

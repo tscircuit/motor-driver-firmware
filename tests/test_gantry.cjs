@@ -18,5 +18,9 @@ const moves=()=>calls.filter(c=>c[1]==='jog');
  axes.Y.last.driver_fault_asserted=true;await j.tick(100000,{});assert.equal(j.held.size,0);assert.equal(j.active,null);
  ({j,axes}=setup());j.press('ArrowUp');await j.tick(50,{});await j.stop();const count=moves().length;await j.tick(50,{});assert.equal(moves().length,count);assert.equal(j.active,null);
  ({j,axes}=setup());axes.Y.last.capabilities.fixed_ramp_ms=null;assert.equal(j.press('ArrowUp'),false);
+ // Start-temperature gating and ordinary buzzer alarms must not abort ongoing motion.
+ ({j,axes}=setup());j.press('ArrowRight');await j.tick(150,{});axes.X.last.temperature_c=65;axes.X.last.alarm_active=true;await j.tick(150,{});assert.equal(j.held.has('ArrowRight'),true);assert.equal(j.active,'X');
+ axes.X.last.temperature_c=75;await j.tick(150,{});assert.equal(j.active,null);
+ ({j,axes}=setup());axes.X.last.temperature_c=65;assert.equal(j.press('ArrowRight'),false);assert.equal(j.press('ArrowUp'),true);
  console.log('PASS simultaneous axes, opposite cancellation, live full/half and speed changes, resume/reverse while braking, independent USB queues, release races, no speed ceiling, stops/faults');
 })().catch(e=>{console.error(e);process.exitCode=1;});

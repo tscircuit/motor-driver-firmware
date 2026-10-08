@@ -11,12 +11,11 @@ def run(board, platform, settings):
         controller = Controller(board, platform, settings,
                                 lambda data: transport.write_line(json.dumps(data)))
         while True:
-            controller.protect()
             for line in transport.read_lines():
                 controller.handle(line)
             controller.tick()
             watchdog.feed()
-            platform.clock.sleep_us(100 if controller.mode != 'stopped' else 1000)
+            platform.clock.sleep_us(25 if controller.mode not in ('stopped','prepared') else 1000)
     finally:
         if controller is not None:
             controller.close()

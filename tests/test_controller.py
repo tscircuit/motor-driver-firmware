@@ -92,6 +92,28 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(c.mode, 'stopped')
         self.assertEqual(c.motion.rate, 0)
 
+    def test_prepared_move_waits_for_run_and_resets_its_start_clock(self):
+        self.assertTrue(self.start(steps=30, ramp_ms=400, defer=True)['ok'])
+        c = self.controller
+        self.assertEqual(c.mode, 'prepared')
+        self.platform.clock.sleep_ms(500)
+        c.tick()
+        self.assertEqual(len(self.board.motor.steps), 0)
+        self.assertTrue(self.send('run_move')['ok'])
+        self.assertEqual(c.mode, 'steps')
+        self.assertEqual(self.platform.clock.ticks_diff(c.motion.deadline, self.platform.clock.ticks_us()), c.motion.interval_us)
+        self.platform.clock.sleep_us(c.motion.interval_us)
+        c.tick()
+        self.assertEqual(c.executed, 1)
+        self.assertFalse(self.send('run_move')['ok'])
+        compact = c.status(compact=True)
+        self.assertTrue(compact['compact'])
+        self.assertNotIn('capabilities', compact)
+        self.assertIn('driver_fault_asserted', compact)
+        self.assertIn('temperature_c', compact)
+        self.send('stop')
+        self.assertFalse(self.send('run_move')['ok'])
+
     def test_position_accumulates_across_moves_and_resolutions(self):
         for resolution, direction, count, expected in (
                 ('quarter', 1, 4, 1), ('full', -1, 2, -1), ('quarter', 1, 2, -0.5)):
