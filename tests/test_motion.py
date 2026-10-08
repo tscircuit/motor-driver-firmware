@@ -54,3 +54,25 @@ class MotionTests(unittest.TestCase):
             periods = [motion.interval(i) for i in range(motion.executed, motion.count)]
             self.assertEqual(periods, sorted(periods))
             self.assertLessEqual(motion.rate, min(speed, 10))
+
+    def test_fixed_ramp_zero_to_full_and_back_is_400ms(self):
+        for speed in (50, 150, 1000, 10000):
+            motion = Motion(Clock(), speed, speed / 0.4, 10, None, 0, fixed_ramp=True)
+            count = int(speed * 0.2)
+            ramp_us = sum(motion.interval(i) for i in range(count))
+            self.assertAlmostEqual(ramp_us, 400000, delta=count + 1)
+            motion.executed = count
+            motion.rate = speed
+            self.assertEqual(motion.brake(), count)
+            brake_us = sum(motion.interval(i) for i in range(count, count * 2))
+            self.assertAlmostEqual(brake_us, 400000, delta=count + 1)
+            self.assertEqual(motion.rate, 0)
+
+    def test_fixed_finite_single_step_and_short_profiles(self):
+        for count in (1, 2, 3, 10, 60, 120):
+            motion = Motion(Clock(), 150, 375, 10, count, 0, fixed_ramp=True)
+            periods = [motion.interval(i) for i in range(count)]
+            self.assertEqual(periods, periods[::-1])
+            self.assertEqual(motion.rate, 0)
+            if count == 60:
+                self.assertAlmostEqual(sum(periods), 800000, delta=count)

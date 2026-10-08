@@ -3,11 +3,12 @@ import math
 
 
 class Motion:
-    def __init__(self, clock, target, acceleration, start_speed, count, settle_ms=100):
+    def __init__(self, clock, target, acceleration, start_speed, count, settle_ms=100, fixed_ramp=False):
         self.clock = clock
         self.target = target
         self.acceleration = acceleration
-        self.initial = min(start_speed, target)
+        self.fixed_ramp = fixed_ramp
+        self.initial = 0 if fixed_ramp else min(start_speed, target)
         self.count = count  # None means continuous
         self.brake_origin = None
         self.brake_speed = None
@@ -34,13 +35,25 @@ class Motion:
                 return min(self.target, math.sqrt(self.cruise_speed ** 2 + 2 * self.acceleration * distance))
             distance = min(position, self.count - position)
             return min(self.target, math.sqrt(self.initial ** 2 + 2 * self.acceleration * max(0, distance)))
+        if self.fixed_ramp and self.count is not None and self.brake_origin is None:
+            peak = min(self.target, math.sqrt(self.acceleration * self.count))
+            ramp_distance = peak ** 2 / (2 * self.acceleration)
+            duration = 2 * peak / self.acceleration + (self.count - 2 * ramp_distance) / peak
+            def time_at(position):
+                if position <= ramp_distance:
+                    return math.sqrt(2 * position / self.acceleration)
+                if position >= self.count - ramp_distance:
+                    return duration - math.sqrt(max(0, 2 * (self.count - position) / self.acceleration))
+                return peak / self.acceleration + (position - ramp_distance) / peak
+            self.rate = speed(index + 1)
+            return max(1, math.ceil(1000000 * (time_at(index + 1) - time_at(index))))
         before, after = speed(index), speed(index + 1)
         self.rate = after
         return max(1, math.ceil(2000000 / (before + after)))
 
     def retarget(self, target, acceleration, rate):
         self.target, self.acceleration = target, acceleration
-        self.initial = min(10, target)
+        self.initial = 0 if self.fixed_ramp else min(10, target)
         self.count = None
         self.brake_origin = self.brake_speed = None
         self.cruise_origin, self.cruise_speed = self.executed, rate
@@ -55,8 +68,10 @@ class Motion:
         tail = max(1, math.ceil((self.brake_speed ** 2 - self.initial ** 2) /
                                (2 * self.acceleration)))
         self.count = self.executed + tail
-        # Keep the current deadline: no abrupt extra pulse at key release.
+        # Legacy profiles retain their deadline; fixed ramps begin at release.
         self.interval_us = self.interval(self.executed)
+        if self.fixed_ramp:
+            self.deadline = self.clock.ticks_add(self.clock.ticks_us(), self.interval_us)
         return tail
 
     def due(self):
@@ -72,7 +87,7 @@ class Motion:
             self.late_steps += 1
         self.executed += 1
         if self.count is not None and self.executed >= self.count:
-            self.deadline = self.clock.ticks_add(self.clock.ticks_us(), self.interval_us)
+            self.deadline = self.clock.ticks_add(self.clock.ticks_us(), 0 if self.fixed_ramp else self.interval_us)
             return
         self.interval_us = self.interval(self.executed)
         # Rebase on the actual output time. No catch-up bursts after USB/I2C/GC.

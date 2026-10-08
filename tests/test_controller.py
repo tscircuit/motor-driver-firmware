@@ -75,6 +75,23 @@ class ControllerTests(unittest.TestCase):
         self.start()
         self.assertFalse(self.send('jog', direction=1, speed_sps=40)['ok'])
 
+    def test_fixed_400ms_ramp_bypasses_acceleration_caps_and_starts_at_zero(self):
+        self.board.max_speed_sps = None
+        self.send('heartbeat')
+        self.assertTrue(self.send('jog', direction=1, resolution='full', speed_sps=10000, ramp_ms=400)['ok'])
+        self.assertEqual(self.controller.acceleration, 25000)
+        self.assertEqual(self.controller.motion.initial, 0)
+        self.assertTrue(self.controller.motion.fixed_ramp)
+        self.assertFalse(self.send('jog', direction=1, speed_sps=40, ramp_ms=250)['ok'])
+        self.send('stop')
+        self.assertTrue(self.start(steps=1, ramp_ms=400)['ok'])
+        c = self.controller
+        self.platform.clock.sleep_us(c.motion.interval_us)
+        c.tick()
+        c.tick()
+        self.assertEqual(c.mode, 'stopped')
+        self.assertEqual(c.motion.rate, 0)
+
     def test_position_accumulates_across_moves_and_resolutions(self):
         for resolution, direction, count, expected in (
                 ('quarter', 1, 4, 1), ('full', -1, 2, -1), ('quarter', 1, 2, -0.5)):

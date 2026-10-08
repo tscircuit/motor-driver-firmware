@@ -13,6 +13,15 @@ def number(value, low, high):
     return value
 
 
+def motion_acceleration(command, board, speed):
+    if 'ramp_ms' in command:
+        if isinstance(command['ramp_ms'], bool) or command['ramp_ms'] != 400:
+            raise ValueError('Ramp duration is fixed at 400 ms')
+        return number(speed / 0.4, 0, None)
+    return number(command.get('acceleration_sps2', getattr(board, 'default_acceleration_sps2', 100)),
+                  getattr(board, 'min_acceleration_sps2', 10), getattr(board, 'max_acceleration_sps2', 1000))
+
+
 def led_value(now, alarm_active, moving):
     if alarm_active:
         return (now // 125) % 2
@@ -91,7 +100,7 @@ class Controller:
                 'resolutions': self.motor.resolutions,
                 'full_steps_per_revolution': b.full_steps_per_revolution,
                 'min_speed_sps': b.min_speed_sps, 'max_speed_sps': b.max_speed_sps,
-                'acceleration_supported': True, 'deceleration_supported': True, 'jog_update_supported': True,
+                'acceleration_supported': True, 'deceleration_supported': True, 'jog_update_supported': True, 'fixed_ramp_ms': 400,
                 'min_acceleration_sps2': getattr(b, 'min_acceleration_sps2', 10),
                 'max_acceleration_sps2': getattr(b, 'max_acceleration_sps2', 1000),
                 'default_acceleration_sps2': getattr(b, 'default_acceleration_sps2', 100),
@@ -156,8 +165,7 @@ class Controller:
         speed = number(command.get('speed_sps'), b.min_speed_sps, b.max_speed_sps)
         if speed <= 0:
             raise ValueError('Speed must be positive')
-        acceleration = number(command.get('acceleration_sps2', getattr(b, 'default_acceleration_sps2', 100)),
-                              getattr(b, 'min_acceleration_sps2', 10), getattr(b, 'max_acceleration_sps2', 1000))
+        acceleration = motion_acceleration(command, b, speed)
         count = command.get('steps') if mode == 'steps' else 0
         if mode == 'steps':
             number(count, 1, b.max_steps)
@@ -187,7 +195,9 @@ class Controller:
         self.stop_reason = ''
         self.acceleration = acceleration
         self.motion = Motion(self.clock, speed, acceleration, getattr(b, 'start_speed_sps', 10),
-                             int(count) if mode == 'steps' else None, getattr(b, 'settle_ms', 100))
+                             int(count) if mode == 'steps' else None,
+                             0 if 'ramp_ms' in command else getattr(b, 'settle_ms', 100),
+                             fixed_ramp='ramp_ms' in command)
 
     def jog(self, command):
         """Update held-key intent without releasing coils or waiting for telemetry."""
@@ -196,14 +206,14 @@ class Controller:
         if self.mode == 'stopped':
             self.start(dict(command, mode='continuous'))
             # Jogging needs only the driver wake delay, not the alignment dwell.
-            self.motion.deadline = self.clock.ticks_add(self.clock.ticks_us(), 1000)
+            if not self.motion.fixed_ramp:
+                self.motion.deadline = self.clock.ticks_add(self.clock.ticks_us(), 1000)
             return
         b = self.board
         speed = number(command.get('speed_sps'), b.min_speed_sps, b.max_speed_sps)
         if speed <= 0:
             raise ValueError('Speed must be positive')
-        acceleration = number(command.get('acceleration_sps2', 100),
-                              getattr(b, 'min_acceleration_sps2', 10), getattr(b, 'max_acceleration_sps2', 1000))
+        acceleration = motion_acceleration(command, b, speed)
         direction = command.get('direction')
         resolution = command.get('resolution', self.resolution)
         if isinstance(direction, bool) or direction not in (-1, 1):
@@ -219,9 +229,11 @@ class Controller:
         self.direction, self.resolution = direction, resolution
         self.speed, self.acceleration = speed, acceleration
         self.mode, self.remaining, self.stop_reason = 'continuous', 0, ''
-        self.motion.retarget(speed, acceleration, previous_rate if same_direction else min(getattr(b, 'start_speed_sps', 10), speed))
+        self.motion.fixed_ramp = 'ramp_ms' in command
+        initial = 0 if self.motion.fixed_ramp else min(getattr(b, 'start_speed_sps', 10), speed)
+        self.motion.retarget(speed, acceleration, previous_rate if same_direction else initial)
         if not same_direction:
-            self.motion.deadline = self.clock.ticks_add(self.clock.ticks_us(), 1000)
+            self.motion.deadline = self.clock.ticks_add(self.clock.ticks_us(), self.motion.interval_us if self.motion.fixed_ramp else 1000)
 
     def handle(self, line):
         ident = None

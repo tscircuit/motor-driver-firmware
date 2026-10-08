@@ -78,3 +78,7 @@ The tail ends at the profile’s low starting rate before releasing coils. It is
 `jog_update_supported: true` enables `{"cmd":"jog","id":4,"resolution":"full","direction":1,"speed_sps":150,"acceleration_sps2":600}`. From stopped, this starts continuous motion with only driver wake delay. From continuous/braking, it retargets the ramp without waiting for completion. Same-direction updates preserve the current rate; direction/resolution changes restart at the low starting rate. Finite-step moves reject this command. Use `decelerate` on release and keep heartbeats running.
 
 The RP2040 profile reports `min_speed_sps: 0`, `max_speed_sps: null`: speeds must be finite and strictly positive. Null means there is no configured upper bound; actual scheduler throughput remains finite. Other profiles may retain numerical bounds.
+
+## Fixed gantry ramps
+
+`fixed_ramp_ms: 400` advertises support for `ramp_ms: 400` on `jog` and `start`. The gantry sends this fixed value and does not expose acceleration customization. Acceleration is derived as `speed_sps / 0.4`, without the legacy acceleration ceiling. These profiles begin and end at zero speed, omit the alignment/final-phase timing dwells, and support single-step triangular moves. Short moves and release before reaching full speed use the corresponding shorter partial ramp; step quantization and scheduling latency affect physical timing. Other ramp durations are rejected. Explicit Stop remains immediate.

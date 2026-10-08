@@ -10,7 +10,7 @@ class Jogger {
   for(const [label,a] of Object.entries(this.axes)){
    if(!a.port||!a.last)return `${label}: connect the board first.`;
    if(this.clock()-a.seen>=1000)return `${label}: waiting for fresh telemetry.`;
-   if(a.last.protocol!==3||a.last.capabilities?.resolutions?.half!==2||!a.last.capabilities?.jog_update_supported)return `${label}: update the responsive jog firmware.`;
+   if(a.last.protocol!==3||a.last.capabilities?.resolutions?.half!==2||a.last.capabilities?.fixed_ramp_ms!==400)return `${label}: update the fixed 400 ms ramp firmware.`;
    if(a.last.sensor_error)return `${label}: temperature sensor fault.`;
    if(a.last.driver_fault_asserted)return `${label}: driver fault.`;
    if(a.last.thermal_alert||a.last.alarm_active||!Number.isFinite(a.last.temperature_c)||a.last.temperature_c>=(a.last.capabilities?.start_below_c??60))return `${label}: temperature protection is active.`;
@@ -32,15 +32,15 @@ class Jogger {
   finally{this.stopsPending--;if(this.held.size)this.update();}
  }
  async release(key){this.held.delete(key);this.update();}
- async tick(speed,invert,acceleration=100,resolution='half'){
+ async tick(speed,invert,resolution='half'){
   if(this.returning||this.stopsPending)return;
   if(!this.key&&!this.active)return;
   if(!this.ready()){await this.stop(this.unavailableReason());return;}
-  if(!Number.isFinite(speed)||speed<=0||!Number.isFinite(acceleration)||acceleration<10||acceleration>1000){await this.stop('Enter a positive speed and supported acceleration.');return;}
+  if(!Number.isFinite(speed)||speed<=0){await this.stop('Enter a positive speed.');return;}
   await Promise.all(Object.entries(this.axes).map(async([axis,a])=>{
    const state=this.states[axis];if(state.busy)return;
    const direction=this.direction(axis)*(invert[axis]?-1:1);
-   const fields={resolution,direction,speed_sps:speed,acceleration_sps2:acceleration};
+   const fields={resolution,direction,speed_sps:speed,ramp_ms:400};
    const desired=direction?JSON.stringify(fields):null;
    if(desired===state.sent){if(!desired&&!a.last.motor_enabled)state.braking=false;return;}
    state.busy=true;const generation=this.generation;
@@ -86,18 +86,16 @@ class PositionSlots {
     const c=a.last.capabilities,delta=(this.slots[index][axis].position-a.last.position_full_steps)*2;
     if(!Number.isSafeInteger(delta)||Math.abs(delta)>(c.max_steps??100000))throw Error('Saved position is outside the board’s supported step count.');
     if(!Number.isFinite(speed)||speed<=0)throw Error('Choose a positive target speed.');
-    // Aim for a quarter-second ramp, within each board’s acceleration support.
-    const acceleration=Math.max(c.min_acceleration_sps2??10,Math.min(speed*4,c.max_acceleration_sps2??1000));
-    return {axis,a,delta,acceleration};
+    return {axis,a,delta};
    });
    const moving=plan.filter(({delta})=>delta!==0);
    this.report(`GOTO ${index+1}: moving both axes…`);
    // Dispatch to independent USB queues together, before waiting for either axis.
-   await Promise.all(moving.map(async({a,delta,acceleration})=>{
+   await Promise.all(moving.map(async({a,delta})=>{
     await a.send('heartbeat',{},false);
     if(generation!==this.jog.generation)return;
     if(!this.valid(index))throw Error(this.jog.unavailableReason()||'Saved position reference is no longer valid.');
-    await a.send('start',{mode:'steps',resolution:'half',direction:Math.sign(delta),steps:Math.abs(delta),speed_sps:speed,acceleration_sps2:acceleration});
+    await a.send('start',{mode:'steps',resolution:'half',direction:Math.sign(delta),steps:Math.abs(delta),speed_sps:speed,ramp_ms:400});
    }));
    if(generation!==this.jog.generation)return false;
    const pending=new Set(moving);
@@ -144,12 +142,12 @@ if(typeof document!=='undefined'){
  document.addEventListener('keydown',e=>{if(e.key==='Escape'||(e.code==='Space'&&!editing(e))){e.preventDefault();void jog.stop();return;}if(!keys[e.key]||(['SELECT','TEXTAREA'].includes(e.target.tagName)||(e.target.tagName==='INPUT'&&e.target.type!=='checkbox'))||e.target.isContentEditable)return;e.preventDefault();if(e.repeat)return;jog.press(e.key);});
  document.addEventListener('keyup',e=>{if(keys[e.key]){e.preventDefault();void jog.release(e.key);}});
  window.addEventListener('blur',()=>void jog.stop('Paused because the page lost focus. Press an arrow when you return.'));window.addEventListener('pagehide',()=>void jog.stop());document.addEventListener('visibilitychange',()=>{if(document.hidden)void jog.stop('Paused because the page is hidden. Press an arrow when you return.');});
- jog.update=()=>{void jog.tick(Number($('jogSpeed').value),{X:$('invertX').checked,Y:$('invertY').checked},Number($('jogAcceleration').value),$('jogResolution').value);render();};
- for(const id of ['jogSpeed','jogAcceleration','jogResolution','invertX','invertY'])$(id).onchange=()=>{if(id==='jogResolution')$(id).blur();jog.update();};
+ jog.update=()=>{void jog.tick(Number($('jogSpeed').value),{X:$('invertX').checked,Y:$('invertY').checked},$('jogResolution').value);render();};
+ for(const id of ['jogSpeed','jogResolution','invertX','invertY'])$(id).onchange=()=>{if(id==='jogResolution')$(id).blur();jog.update();};
  setInterval(jog.update,16);
  setInterval(()=>{for(const a of Object.values(axes))if(a.port&&(jog.key||jog.active||jog.returning)&&!document.hidden&&Date.now()-a.seen<1000)void a.send('heartbeat',{},false);},400);
  for(const button of document.querySelectorAll('[data-arrow]')){button.addEventListener('pointerdown',e=>{e.preventDefault();if(jog.press(button.dataset.arrow))button.setPointerCapture(e.pointerId);});button.addEventListener('pointerup',()=>void jog.release(button.dataset.arrow));button.addEventListener('pointercancel',()=>void jog.stop());button.addEventListener('lostpointercapture',()=>void jog.release(button.dataset.arrow));}
- function render(){for(const button of document.querySelectorAll('[data-arrow]')){button.disabled=!jog.ready()||jog.stopsPending>0||jog.returning;button.classList.toggle('engaged',jog.held.has(button.dataset.arrow));button.classList.toggle('coasting',jog.states[keys[button.dataset.arrow][0]].braking);}for(let i=0;i<3;i++){const slot=positions.slots[i];$('savePosition'+i).disabled=!positions.hasCoordinates()||!positions.idle();$('gotoPosition'+i).disabled=!positions.valid(i)||!positions.idle();$('positionValue'+i).textContent=!slot?'Not saved':positions.hasCoordinates()&&!positions.valid(i)?'Previous board session · save again':`X ${Number(slot.X?.position*2).toFixed(0)} · Y ${Number(slot.Y?.position*2).toFixed(0)} half steps`;}$('jogPhase').textContent=jog.returning?`GOTO position ${positions.slot+1}…`:jog.phase==='braking'?'Slowing down…':jog.active?'Accelerating / jogging':jog.stopsPending?'Stopping…':jog.ready()?'Ready · press an arrow':jog.unavailableReason();$('brakeEstimate').textContent=`Release can add up to ${Math.max(1,Math.ceil(Number($('jogSpeed').value)**2/(2*Number($('jogAcceleration').value))))} ${$('jogResolution').value} steps of deceleration, plus USB/input latency. Space/Escape stops immediately.`;for(const label of ['X','Y']){const a=axes[label];$('connect'+label).textContent=a.port?'Disconnect '+label:'Connect '+label;$('rename'+label).disabled=!a.port||Date.now()-a.seen>1000||!a.last?.usb_name_supported||a.last?.motor_enabled;}}
+ function render(){for(const button of document.querySelectorAll('[data-arrow]')){button.disabled=!jog.ready()||jog.stopsPending>0||jog.returning;button.classList.toggle('engaged',jog.held.has(button.dataset.arrow));button.classList.toggle('coasting',jog.states[keys[button.dataset.arrow][0]].braking);}for(let i=0;i<3;i++){const slot=positions.slots[i];$('savePosition'+i).disabled=!positions.hasCoordinates()||!positions.idle();$('gotoPosition'+i).disabled=!positions.valid(i)||!positions.idle();$('positionValue'+i).textContent=!slot?'Not saved':positions.hasCoordinates()&&!positions.valid(i)?'Previous board session · save again':`X ${Number(slot.X?.position*2).toFixed(0)} · Y ${Number(slot.Y?.position*2).toFixed(0)} half steps`;}$('jogPhase').textContent=jog.returning?`GOTO position ${positions.slot+1}…`:jog.phase==='braking'?'Slowing down…':jog.active?'Accelerating / jogging':jog.stopsPending?'Stopping…':jog.ready()?'Ready · press an arrow':jog.unavailableReason();$('brakeEstimate').textContent=`Release can add up to ${Math.max(1,Math.ceil(Number($('jogSpeed').value)*0.2))} ${$('jogResolution').value} steps of deceleration, plus USB/input latency. Space/Escape stops immediately.`;for(const label of ['X','Y']){const a=axes[label];$('connect'+label).textContent=a.port?'Disconnect '+label:'Connect '+label;$('rename'+label).disabled=!a.port||Date.now()-a.seen>1000||!a.last?.usb_name_supported||a.last?.motor_enabled;}}
  render();
  if(!navigator.serial)report('Open in desktop Chrome or Edge with Web Serial support.');
 }
