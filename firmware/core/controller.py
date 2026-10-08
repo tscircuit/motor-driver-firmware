@@ -290,19 +290,14 @@ class Controller:
         if self.mode in ('steps', 'braking') and self.remaining == 0 and self.motion.due():
             self.stop('Jog release complete' if self.mode == 'braking' else 'Step move complete')
         if self.mode != 'stopped' and self.motion.due():
-            # Large scheduling stalls stop the move instead of silently continuing
-            # with an abrupt torque/speed disturbance. Counts are not encoder data.
-            if self.motion.lateness() > max(20000, self.motion.interval_us):
-                self.motion.max_lateness_us = max(self.motion.max_lateness_us, self.motion.lateness())
-                self.stop('Motion timing overrun; reduce speed')
-            else:
-                self.motor.step(self.direction)
-                self.motion.advanced()
-                self.executed += 1
-                if self.mode in ('steps', 'braking'):
-                    self.remaining -= 1
-                    # Retain the final phase for one interval so the rotor can
-                    # follow it; safety stops still release immediately.
+            # Emit one overdue step and rebase the deadline on actual output
+            # time. Lateness is diagnostic; it does not stop the move or burst.
+            self.motor.step(self.direction)
+            self.motion.advanced()
+            self.executed += 1
+            if self.mode in ('steps', 'braking'):
+                self.remaining -= 1
+                # Retain the final phase for one interval before release.
         if self.alarm:
             self.song.stop()
         frequency = self.song.tick(now)

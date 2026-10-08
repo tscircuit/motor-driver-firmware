@@ -109,9 +109,9 @@ Updated firmware accepts an optional `acceleration_sps2` on `start` (default 100
 
 The RP2040 profile now advertises up to 400 selected increments/sec (120 nominal RPM in full steps, 60 in half steps). This is a software ceiling, **not a hardware-validated no-skip speed**. Start with 40 steps/sec and 100 steps/sec², then increase gradually with an unloaded motor. Initial alignment can move the shaft and is not counted as a commanded step.
 
-Scheduling uses microsecond deadlines and a 100 µs active-loop sleep instead of millisecond rounding and a 1 ms sleep. Late steps are never emitted in catch-up bursts. A delay greater than the larger of 20 ms or one step interval stops the move. Telemetry reports `profile_speed_sps` (planned, not measured), `late_steps` (over 250 µs late) and `max_step_lateness_us`, reset per move. These counters measure scheduler lateness, not shaft skips.
+Scheduling uses microsecond deadlines and a 100 µs active-loop sleep instead of millisecond rounding and a 1 ms sleep. Late steps are never emitted in catch-up bursts. Late motion continues with one overdue step, rebasing the next deadline on actual output time; scheduler lateness does not stop the move. Telemetry reports `profile_speed_sps` (planned, not measured), `late_steps` (over 250 µs late) and `max_step_lateness_us`, reset per move. These counters measure scheduler lateness, not shaft skips.
 
-This remains a cooperative MicroPython scheduler: USB writes, I2C reads and garbage collection can still delay steps, and actual speed can be below the profile. It is not PIO/timer-isolated motion. Host tests cover ramps, deceleration, exact counts, clock wrap and overrun shutdown; physical high-speed timing and skipping remain unverified. Supply dropouts, the hardware current limit and insufficient torque cannot be eliminated by these firmware changes. Faster controls are enabled only when the connected firmware advertises them; upload the complete new firmware tree to use them.
+This remains a cooperative MicroPython scheduler: USB writes, I2C reads and garbage collection can still delay steps, and actual speed can be below the profile. It is not PIO/timer-isolated motion. Host tests cover ramps, deceleration, exact counts, clock wrap and continuation after scheduler delays; physical high-speed timing and skipping remain unverified. Supply dropouts, the hardware current limit and insufficient torque cannot be eliminated by these firmware changes. Faster controls are enabled only when the connected firmware advertises them; upload the complete new firmware tree to use them.
 
 ## Play buzzer songs
 
@@ -157,3 +157,5 @@ Both controllers must advertise half stepping and `deceleration_supported`. Uplo
 There are no travel limits, homing, or coordinated XY trajectories. Watch physical travel. Stop releases holding torque. Half stepping can increase heat because it alternates one and two energized coils. Current and position are not measured by this firmware.
 
 Run `node tests/test_gantry.cjs` and `python3 -m unittest discover -s tests` for controller regression tests. Physical gantry validation remains necessary before use.
+
+Scheduler lateness and slow jog transitions no longer trigger automatic motion shutdowns. Lateness counters remain diagnostic. Commands, connection/heartbeat loss, and board faults retain their existing handling.
