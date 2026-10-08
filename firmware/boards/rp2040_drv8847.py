@@ -25,8 +25,8 @@ class Board:
     name = 'RP2040 / DRV8847'
     mcu = 'RP2040'
     full_steps_per_revolution = 200
-    min_speed_sps = 5
-    max_speed_sps = 400
+    min_speed_sps = 0
+    max_speed_sps = None
     start_speed_sps = 10
     default_acceleration_sps2 = 100
     min_acceleration_sps2 = 10

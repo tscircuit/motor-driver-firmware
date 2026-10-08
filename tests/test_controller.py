@@ -34,6 +34,47 @@ class ControllerTests(unittest.TestCase):
         args.update(values)
         return self.send('start', **args)
 
+    def test_live_jog_updates_and_unbounded_speed(self):
+        c = self.controller
+        self.board.min_speed_sps = 0
+        self.board.max_speed_sps = None
+        self.send('heartbeat')
+        self.assertTrue(self.send('jog', resolution='full', direction=1,
+                                  speed_sps=10000, acceleration_sps2=600)['ok'])
+        self.assertLessEqual(c.motion.lateness(), 0)
+        self.platform.clock.sleep_ms(1)
+        c.tick()
+        self.assertEqual(c.executed, 1)
+        rate = c.motion.rate
+        self.assertTrue(self.send('decelerate')['ok'])
+        self.assertEqual(c.mode, 'braking')
+        self.assertTrue(self.send('jog', resolution='full', direction=1,
+                                  speed_sps=50000, acceleration_sps2=600)['ok'])
+        self.assertEqual(c.mode, 'continuous')
+        self.assertGreaterEqual(c.motion.rate, rate)
+        self.assertTrue(self.send('jog', resolution='quarter', direction=-1,
+                                  speed_sps=0.5, acceleration_sps2=600)['ok'])
+        self.assertEqual(c.direction, -1)
+        self.assertEqual(c.resolution, 'quarter')
+        self.assertEqual(c.speed, 0.5)
+        self.assertFalse(self.send('jog', direction=True, speed_sps=50)['ok'])
+        self.assertFalse(self.send('jog', direction=1, speed_sps=0)['ok'])
+        self.assertFalse(self.send('jog', direction=1, speed_sps=float('inf'))['ok'])
+
+    def test_live_speed_decrease_ramps_without_dwell(self):
+        c = self.controller
+        self.start(mode='continuous', speed_sps=100)
+        c.motion.rate = 80
+        deadline = c.motion.deadline
+        self.assertTrue(self.send('jog', direction=1, resolution='quarter',
+                                  speed_sps=20, acceleration_sps2=100)['ok'])
+        self.assertEqual(c.motion.deadline, deadline)
+        self.assertLess(c.motion.rate, 80)
+        self.assertGreater(c.motion.rate, 20)
+        self.send('stop')
+        self.start()
+        self.assertFalse(self.send('jog', direction=1, speed_sps=40)['ok'])
+
     def test_position_accumulates_across_moves_and_resolutions(self):
         for resolution, direction, count, expected in (
                 ('quarter', 1, 4, 1), ('full', -1, 2, -1), ('quarter', 1, 2, -0.5)):

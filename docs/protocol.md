@@ -72,3 +72,9 @@ The tail ends at the profile’s low starting rate before releasing coils. It is
 `position_full_steps` accumulates signed commanded increments across all moves, normalized to full steps. Half-step output adds/subtracts 0.5; full-step output adds/subtracts 1. This is not an encoder measurement and does not count initial alignment or external motion. It starts at zero for each controller run.
 
 `position_session` is a fresh random nonce for each controller run on the MicroPython platform. Clients must pair it with `device_id` before reusing saved targets. Unsupported platforms may report null. The gantry page saves three pairs of coordinates in local storage and requires matching device/session identities to execute a return.
+
+## Live jog intent
+
+`jog_update_supported: true` enables `{"cmd":"jog","id":4,"resolution":"full","direction":1,"speed_sps":150,"acceleration_sps2":600}`. From stopped, this starts continuous motion with only driver wake delay. From continuous/braking, it retargets the ramp without waiting for completion. Same-direction updates preserve the current rate; direction/resolution changes restart at the low starting rate. Finite-step moves reject this command. Use `decelerate` on release and keep heartbeats running.
+
+The RP2040 profile reports `min_speed_sps: 0`, `max_speed_sps: null`: speeds must be finite and strictly positive. Null means there is no configured upper bound; actual scheduler throughput remains finite. Other profiles may retain numerical bounds.
