@@ -75,7 +75,7 @@ class PositionSlots {
   try{this.storage?.setItem('gantry-position-slots-v1',JSON.stringify(this.slots));}catch{this.report('Position saved for this page; browser storage is unavailable.');return true;}
   this.report(`Saved position ${index+1}.`);return true;
  }
- async goto(index,speed,acceleration){
+ async goto(index,speed){
   if(!this.idle()||!this.valid(index)){this.report('Save a position in this board session and stop both axes before GOTO.');return false;}
   this.busy=true;this.slot=index;
   const preparation=this.jog.stop();const generation=this.jog.generation;this.jog.returning=true;
@@ -85,26 +85,36 @@ class PositionSlots {
    const plan=Object.entries(this.axes).map(([axis,a])=>{
     const c=a.last.capabilities,delta=(this.slots[index][axis].position-a.last.position_full_steps)*2;
     if(!Number.isSafeInteger(delta)||Math.abs(delta)>(c.max_steps??100000))throw Error('Saved position is outside the board’s supported step count.');
-    if(!Number.isFinite(speed)||speed<=0||!Number.isFinite(acceleration)||acceleration<(c.min_acceleration_sps2??10)||acceleration>(c.max_acceleration_sps2??1000))throw Error('Choose supported speed and acceleration settings.');
-    return {axis,a,delta};
+    if(!Number.isFinite(speed)||speed<=0)throw Error('Choose a positive target speed.');
+    // Aim for a quarter-second ramp, within each board’s acceleration support.
+    const acceleration=Math.max(c.min_acceleration_sps2??10,Math.min(speed*4,c.max_acceleration_sps2??1000));
+    return {axis,a,delta,acceleration};
    });
-   for(const {axis,a,delta} of plan){
-    if(!delta)continue;
-    if(generation!==this.jog.generation)return false;
-    if(!this.valid(index))throw Error(this.jog.unavailableReason()||'Saved position reference is no longer valid.');
-    this.report(`GOTO ${index+1}: moving ${axis}…`);
+   const moving=plan.filter(({delta})=>delta!==0);
+   this.report(`GOTO ${index+1}: moving both axes…`);
+   // Dispatch to independent USB queues together, before waiting for either axis.
+   await Promise.all(moving.map(async({a,delta,acceleration})=>{
     await a.send('heartbeat',{},false);
-    if(generation!==this.jog.generation)return false;
+    if(generation!==this.jog.generation)return;
+    if(!this.valid(index))throw Error(this.jog.unavailableReason()||'Saved position reference is no longer valid.');
     await a.send('start',{mode:'steps',resolution:'half',direction:Math.sign(delta),steps:Math.abs(delta),speed_sps:speed,acceleration_sps2:acceleration});
-    while(generation===this.jog.generation){
+   }));
+   if(generation!==this.jog.generation)return false;
+   const pending=new Set(moving);
+   while(pending.size){
+    await Promise.all([...pending].map(async(move)=>{
+     const {axis,a}=move;
      await a.send('status');
-     if(generation!==this.jog.generation)return false;
+     if(generation!==this.jog.generation)return;
      if(!this.valid(index))throw Error(this.jog.unavailableReason()||'Saved position reference is no longer valid.');
-     if(!a.last.motor_enabled){if(a.last.stop_reason!=='Step move complete')throw Error(`${axis} stopped: ${a.last.stop_reason}`);break;}
-     await this.pause(100);
-    }
+     if(!a.last.motor_enabled){
+      if(a.last.stop_reason!=='Step move complete')throw Error(`${axis} stopped: ${a.last.stop_reason}`);
+      if(a.last.position_full_steps!==this.slots[index][axis].position)throw Error(`${axis}: commanded position did not match the saved target.`);
+      pending.delete(move);
+     }
+    }));
     if(generation!==this.jog.generation)return false;
-    if(a.last.position_full_steps!==this.slots[index][axis].position)throw Error(`${axis}: commanded position did not match the saved target.`);
+    if(pending.size)await this.pause(50);
    }
    this.report(`At saved position ${index+1}.`);return true;
   }catch(e){this.report(e.message);if(generation===this.jog.generation)await this.jog.stop();return false;}
@@ -123,7 +133,7 @@ if(typeof document!=='undefined'){
   async close(){if(this.closing)return;this.closing=true;try{if(this.reader)await this.reader.cancel();if(this.reading)await this.reading;await this.chain.catch(()=>{});if(this.port)await this.port.close();}catch{}finally{this.port=null;this.last=null;this.seen=0;this.closing=false;for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(Error('Disconnected'));}this.pending.clear();$('status'+this.label).textContent='Disconnected';}}
  }
  const axes={X:new Axis('X'),Y:new Axis('Y')};const jog=new Jogger(axes,report);let storage;try{storage=window.localStorage;}catch{}const positions=new PositionSlots(axes,jog,report,storage);
- for(let i=0;i<3;i++){$('savePosition'+i).onclick=()=>positions.save(i);$('gotoPosition'+i).onclick=()=>void positions.goto(i,Number($('jogSpeed').value),Number($('jogAcceleration').value));}
+ for(let i=0;i<3;i++){$('savePosition'+i).onclick=()=>positions.save(i);$('gotoPosition'+i).onclick=()=>void positions.goto(i,Number($('jogSpeed').value));}
  for(const label of ['X','Y']){
   $('connect'+label).onclick=async()=>{if(axes[label].port){await jog.stop();await axes[label].close();}else await axes[label].connect();};
   $('rename'+label).onclick=async()=>{await jog.stop();const name=$('name'+label).value.trim();if(!/^[\x20-\x7e]{1,32}$/.test(name)){report('Use 1–32 printable ASCII characters.');return;}try{const ack=await axes[label].send('set_device_name',{name});report('Saved '+ack.device_name+'. Reconnect using the new USB name.');await axes[label].close();}catch(e){report(e.message);}};

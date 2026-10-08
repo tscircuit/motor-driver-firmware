@@ -162,8 +162,8 @@ Scheduler lateness and slow jog transitions no longer trigger automatic motion s
 
 ## Three saved gantry positions
 
-The gantry page has three SAVE/GOTO rows. SAVE records both boards’ cumulative commanded positions while stopped, and stores the slots in this browser’s local storage. GOTO moves X first and then Y in half steps with the selected speed and acceleration. It is a sequential return, not coordinated XY interpolation. Arrow jogging is paused during GOTO; Stop/Space/Escape or focus loss cancels the return without starting the next axis.
+The gantry page has three SAVE/GOTO rows. SAVE records both boards’ cumulative commanded positions while stopped, and stores the slots in this browser’s local storage. GOTO dispatches X and Y together in half steps at the selected target speed. It automatically chooses acceleration for a quarter-second ramp, bounded by each board’s supported acceleration range. Each axis accelerates, cruises if the distance allows, and decelerates independently; short moves use triangular ramps and may not reach the target speed. The axes can finish at different times. Arrow jogging is paused during GOTO; Stop/Space/Escape or focus loss cancels the return and stops both axes.
 
 Coordinates are counted from each controller run, not measured by an encoder. They include finite moves, continuous jogging and deceleration steps, and survive browser disconnects. Each controller run gets a random session ID. Firmware restart, reset or changing boards invalidates old slots; save again in the new session. Manual/back-driven movement, missed steps and initial alignment are not detected.
 
-Upload updated `core/controller.py` and `platforms/micropython.py` for cumulative position telemetry. Run `node tests/test_positions.cjs` to test saved targets, sequential returns, cancellation and session invalidation.
+Upload updated `core/controller.py` and `platforms/micropython.py` for cumulative position telemetry. Run `node tests/test_positions.cjs` to test saved targets, simultaneous returns, cancellation and session invalidation.
