@@ -148,11 +148,11 @@ adds the two-second pause after playback; it is not part of the audio asset.
 
 ## Two-board keyboard jogging
 
-Open `/gantry.html`, connect two different controllers as X and Y, then hold arrow keys or on-screen arrows. X and Y inputs run independently; combining horizontal and vertical arrows moves both axes. Opposite arrows on one axis cancel each other. The full/half selector chooses 1.8° or 0.9° increments. Speed accepts any finite positive value with no configured ceiling. Defaults are 150 selected steps/sec and 600 selected steps/sec²; acceleration remains 10–1000.
+Open `/gantry.html`, connect two different controllers as X and Y, then hold arrow keys or on-screen arrows. X and Y inputs run independently; combining horizontal and vertical arrows moves both axes. Opposite arrows on one axis cancel each other. The full/half selector chooses 1.8° or 0.9° increments. Speed accepts any finite positive value with no configured ceiling. Default speed is 150 selected steps/sec. Jogging and GOTO use fixed 400 ms zero-to-full and full-to-zero ramps, with no acceleration setting.
 
 Input dispatch happens immediately on press/release and is reconciled every 16 ms. Each axis has its own in-flight command, so a slow acknowledgement from X never blocks Y. The firmware `jog` command starts without the finite-move alignment dwell, resumes braking without releasing coils, and retargets speed while preserving the current ramp rate. Direction changes restart at the low starting rate immediately. Release decelerates only the released axis; another press need not wait for stopped telemetry. Space/Escape and explicit stops clear held input. Settings use selected increments; GOTO continues using half steps for exact saved coordinates.
 
-Controllers must advertise `jog_update_supported`. Upload updated `core/controller.py`, `core/motion.py`, and `boards/rp2040_drv8847.py` in maintenance mode. Existing names and alarm settings are preserved.
+Controllers must advertise `fixed_ramp_ms: 400`. Upload updated `core/controller.py`, `core/motion.py`, and `boards/rp2040_drv8847.py` in maintenance mode. Existing names and alarm settings are preserved.
 
 There are no travel limits, homing, or coordinated XY trajectories. Watch physical travel. Stop releases holding torque. Half stepping can increase heat because it alternates one and two energized coils. Current and position are not measured by this firmware.
 
@@ -162,7 +162,7 @@ Scheduler lateness and slow jog transitions no longer trigger automatic motion s
 
 ## Three saved gantry positions
 
-The gantry page has three SAVE/GOTO rows. SAVE records both boards’ cumulative commanded positions while stopped, and stores the slots in this browser’s local storage. GOTO dispatches X and Y together in half steps at the selected target speed. It automatically chooses acceleration for a quarter-second ramp, bounded by each board’s supported acceleration range. Each axis accelerates, cruises if the distance allows, and decelerates independently; short moves use triangular ramps and may not reach the target speed. The axes can finish at different times. Arrow jogging is paused during GOTO; Stop/Space/Escape or focus loss cancels the return and stops both axes.
+The gantry page has three SAVE/GOTO rows. SAVE records both boards’ cumulative commanded positions while stopped, and stores the slots in this browser’s local storage. GOTO dispatches X and Y together in half steps at the selected target speed. It uses fixed 400 ms ramps from zero to full speed and from full speed to zero. Each axis accelerates, cruises if the distance allows, and decelerates independently; short moves use triangular ramps and may not reach the target speed. The axes can finish at different times. Arrow jogging is paused during GOTO; Stop/Space/Escape or focus loss cancels the return and stops both axes.
 
 Coordinates are counted from each controller run, not measured by an encoder. They include finite moves, continuous jogging and deceleration steps, and survive browser disconnects. Each controller run gets a random session ID. Firmware restart, reset or changing boards invalidates old slots; save again in the new session. Manual/back-driven movement, missed steps and initial alignment are not detected.
 

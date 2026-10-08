@@ -4,7 +4,7 @@ let now=100,calls=[];
 function setup(){
  calls=[];
  const axes={};
- for(const name of ['X','Y'])axes[name]={port:{},seen:now,last:{protocol:3,temperature_c:25,motor_enabled:false,device_id:name,position_session:'boot-1',position_full_steps:0,capabilities:{resolutions:{half:2},deceleration_supported:true,jog_update_supported:true,max_steps:100000}},send:async function(cmd,fields){calls.push([name,cmd,fields]);this.seen=now;if(cmd==='stop'){this.last.motor_enabled=false;this.last.stop_reason='Stopped by user';}if(cmd==='start'){this.last.motor_enabled=true;this.move=fields;}if(cmd==='status'&&this.move){this.last.position_full_steps+=this.move.direction*this.move.steps/2;this.move=null;this.last.motor_enabled=false;this.last.stop_reason='Step move complete';}}};
+ for(const name of ['X','Y'])axes[name]={port:{},seen:now,last:{protocol:3,temperature_c:25,motor_enabled:false,device_id:name,position_session:'boot-1',position_full_steps:0,capabilities:{resolutions:{half:2},deceleration_supported:true,jog_update_supported:true,fixed_ramp_ms:400,max_steps:100000}},send:async function(cmd,fields){calls.push([name,cmd,fields]);this.seen=now;if(cmd==='stop'){this.last.motor_enabled=false;this.last.stop_reason='Stopped by user';}if(cmd==='start'){this.last.motor_enabled=true;this.move=fields;}if(cmd==='status'&&this.move){this.last.position_full_steps+=this.move.direction*this.move.steps/2;this.move=null;this.last.motor_enabled=false;this.last.stop_reason='Step move complete';}}};
  const storage={value:null,getItem(){return this.value;},setItem(k,v){this.value=v;}};
  const jog=new Jogger(axes,()=>{},()=>now);const positions=new PositionSlots(axes,jog,()=>{},storage,async()=>{});return {axes,jog,positions,storage};
 }
@@ -14,7 +14,7 @@ function setup(){
  assert.equal(positions.save(0),true);assert.equal(positions.valid(0),true);assert.equal(positions.slots.length,3);
  axes.X.last.position_full_steps=-1;axes.Y.last.position_full_steps=3;
  assert.equal(await positions.goto(0,40,100),true);
- const starts=calls.filter(c=>c[1]==='start');assert.equal(starts.length,2);assert.equal(starts[0][0],'X');assert.equal(starts[0][2].steps,23);assert.equal(starts[0][2].direction,1);assert.equal(starts[1][0],'Y');assert.equal(starts[1][2].steps,10);assert.equal(starts[1][2].direction,-1);assert.equal(starts[0][2].speed_sps,40);assert.equal(starts[0][2].acceleration_sps2,160);assert.ok(calls.findIndex(c=>c[0]==='Y'&&c[1]==='start')<calls.findIndex(c=>c[0]==='X'&&c[1]==='status'&&calls.indexOf(c)>calls.indexOf(starts[0])));assert.equal(axes.X.last.position_full_steps,10.5);assert.equal(axes.Y.last.position_full_steps,-2);assert.equal(jog.returning,false);
+ const starts=calls.filter(c=>c[1]==='start');assert.equal(starts.length,2);assert.equal(starts[0][0],'X');assert.equal(starts[0][2].steps,23);assert.equal(starts[0][2].direction,1);assert.equal(starts[1][0],'Y');assert.equal(starts[1][2].steps,10);assert.equal(starts[1][2].direction,-1);assert.equal(starts[0][2].speed_sps,40);assert.equal(starts[0][2].ramp_ms,400);assert.ok(calls.findIndex(c=>c[0]==='Y'&&c[1]==='start')<calls.findIndex(c=>c[0]==='X'&&c[1]==='status'&&calls.indexOf(c)>calls.indexOf(starts[0])));assert.equal(axes.X.last.position_full_steps,10.5);assert.equal(axes.Y.last.position_full_steps,-2);assert.equal(jog.returning,false);
  assert.equal(new PositionSlots(axes,jog,()=>{},storage).valid(0),true);
  assert.equal(positions.save(1),true);assert.equal(positions.save(2),true);assert.equal(positions.save(3),false);
  axes.X.last.position_session='boot-2';assert.equal(positions.valid(0),false);const before=calls.length;assert.equal(await positions.goto(0,40,100),false);assert.equal(calls.length,before);
@@ -29,7 +29,7 @@ function setup(){
  let startAck;const xSend=axes.X.send;axes.X.send=async function(cmd,fields){await xSend.call(this,cmd,fields);if(cmd==='start')await new Promise(r=>startAck=r);};
  const returning=positions.goto(0,100000);await new Promise(r=>setImmediate(r));
  assert.ok(startAck);assert.equal(calls.filter(c=>c[1]==='start').length,2);assert.equal(axes.Y.last.motor_enabled,true);assert.equal(positions.busy,true);
- assert.equal(calls.find(c=>c[1]==='start')[2].speed_sps,100000);assert.equal(calls.find(c=>c[1]==='start')[2].acceleration_sps2,1000);
+ assert.equal(calls.find(c=>c[1]==='start')[2].speed_sps,100000);assert.equal(calls.find(c=>c[1]==='start')[2].ramp_ms,400);
  startAck();assert.equal(await returning,true);
  // Keep waiting after the shorter axis finishes, and skip zero-distance axes.
  ({axes,jog,positions}=setup());axes.X.last.position_full_steps=1;axes.Y.last.position_full_steps=10;positions.save(0);axes.X.last.position_full_steps=0;axes.Y.last.position_full_steps=0;
