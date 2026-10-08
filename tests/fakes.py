@@ -133,6 +133,9 @@ class Platform:
         self.resets = 0
         self.feeds = 0
 
+    def motion_session(self):
+        return 'simulator-session-001'
+
     def device_id(self):
         return 'simulator-001'
 

@@ -3,6 +3,7 @@ import machine
 import time
 import sys
 import select
+import os
 from platforms import usb_identity
 
 
@@ -83,6 +84,10 @@ class Platform:
 
     def device_id(self):
         return machine.unique_id().hex()
+
+    def motion_session(self):
+        # A controller-run nonce distinguishes restart/reset coordinate frames.
+        return os.urandom(12).hex()
 
     def reset(self):
         machine.reset()

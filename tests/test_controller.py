@@ -34,6 +34,24 @@ class ControllerTests(unittest.TestCase):
         args.update(values)
         return self.send('start', **args)
 
+    def test_position_accumulates_across_moves_and_resolutions(self):
+        for resolution, direction, count, expected in (
+                ('quarter', 1, 4, 1), ('full', -1, 2, -1), ('quarter', 1, 2, -0.5)):
+            self.assertTrue(self.start(resolution=resolution, direction=direction, steps=count)['ok'])
+            for _ in range(2000):
+                self.send('heartbeat')
+                self.platform.clock.sleep_us(1000)
+                self.controller.tick()
+                if self.controller.mode == 'stopped':
+                    break
+            self.assertEqual(self.controller.status()['position_full_steps'], expected)
+            self.assertEqual(self.controller.status()['position_session'], 'simulator-session-001')
+        self.send('stop')
+        self.assertEqual(self.controller.status()['position_full_steps'], -0.5)
+        restarted = Controller(self.board, self.platform, Settings(), self.messages.append)
+        self.assertEqual(restarted.status()['position_full_steps'], 0)
+        restarted.close()
+
     def test_release_decelerates_then_stops_and_never_extends_tail(self):
         self.assertTrue(self.start(mode='continuous')['ok'])
         for _ in range(1000):

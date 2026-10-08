@@ -66,3 +66,9 @@ Capabilities: `song_supported`, `song_format: "u16le-hz-u16le-ms"`, `song_max_by
 Updated firmware advertises `deceleration_supported: true`. Start a half-step jog with `start`, `mode: "continuous"`, `resolution: "half"`, `speed_sps` and `acceleration_sps2`. `{"cmd":"decelerate","id":3}` turns that jog into a bounded deceleration tail using the same acceleration magnitude. Telemetry reports `motion_mode: "braking"`, remaining steps and planned speed, then `stop_reason: "Jog release complete"`. Repeated deceleration commands do not extend the tail; issuing one while stopped does not start motion. It rejects a finite-step move.
 
 The tail ends at the profile’s low starting rate before releasing coils. It is speed ramping, not current control. Keep sending heartbeats through deceleration. `stop`, faults and heartbeat expiry still disable outputs immediately. `decelerate` does not bypass any thermal, sensor or driver protection.
+
+## Commanded position reference
+
+`position_full_steps` accumulates signed commanded increments across all moves, normalized to full steps. Half-step output adds/subtracts 0.5; full-step output adds/subtracts 1. This is not an encoder measurement and does not count initial alignment or external motion. It starts at zero for each controller run.
+
+`position_session` is a fresh random nonce for each controller run on the MicroPython platform. Clients must pair it with `device_id` before reusing saved targets. Unsupported platforms may report null. The gantry page saves three pairs of coordinates in local storage and requires matching device/session identities to execute a return.

@@ -159,3 +159,11 @@ There are no travel limits, homing, or coordinated XY trajectories. Watch physic
 Run `node tests/test_gantry.cjs` and `python3 -m unittest discover -s tests` for controller regression tests. Physical gantry validation remains necessary before use.
 
 Scheduler lateness and slow jog transitions no longer trigger automatic motion shutdowns. Lateness counters remain diagnostic. Commands, connection/heartbeat loss, and board faults retain their existing handling.
+
+## Three saved gantry positions
+
+The gantry page has three SAVE/GOTO rows. SAVE records both boards’ cumulative commanded positions while stopped, and stores the slots in this browser’s local storage. GOTO moves X first and then Y in half steps with the selected speed and acceleration. It is a sequential return, not coordinated XY interpolation. Arrow jogging is paused during GOTO; Stop/Space/Escape or focus loss cancels the return without starting the next axis.
+
+Coordinates are counted from each controller run, not measured by an encoder. They include finite moves, continuous jogging and deceleration steps, and survive browser disconnects. Each controller run gets a random session ID. Firmware restart, reset or changing boards invalidates old slots; save again in the new session. Manual/back-driven movement, missed steps and initial alignment are not detected.
+
+Upload updated `core/controller.py` and `platforms/micropython.py` for cumulative position telemetry. Run `node tests/test_positions.cjs` to test saved targets, sequential returns, cancellation and session invalidation.
