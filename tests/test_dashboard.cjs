@@ -37,13 +37,5 @@ context.packet=JSON.stringify({...telemetry,capabilities:{song_supported:true},a
 context.packet=JSON.stringify(telemetry);run('receive(packet)');assert.equal(element('demoSong').disabled,true);
 console.log('PASS song capability, file selection and alarm gating');
 
-context.packet=JSON.stringify({...telemetry,hot_alert_enabled:true,capabilities:{hot_speech_supported:true}});run('receive(packet)');
-assert.equal(element('hotAlert').value,'on');assert.equal(element('saveHotAlert').disabled,false);
-assert.equal(element('testHotAlert').disabled,false);
-element('hotAlert').value='off';element('hotAlert').change();run('receive(packet)');assert.equal(element('hotAlert').value,'off');
-context.packet=JSON.stringify({...telemetry,alarm_active:true,capabilities:{hot_speech_supported:true}});run('receive(packet)');
-assert.equal(element('testHotAlert').disabled,true);assert.equal(element('saveHotAlert').disabled,false);
-context.packet=JSON.stringify({...telemetry,motor_enabled:true,capabilities:{hot_speech_supported:true}});run('receive(packet)');
-assert.equal(element('saveHotAlert').disabled,true);
-run('lastSeen=0;controls()');assert.equal(element('testHotAlert').disabled,true);
-console.log('PASS board speech controls, unsaved edits, alarm/motion/stale gating');
+assert.equal(elements.has('hotAlert'),false);
+console.log('PASS tone-only dashboard has no speech controls');
