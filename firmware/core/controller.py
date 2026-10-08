@@ -50,6 +50,8 @@ class Controller:
         self.acceleration = getattr(board, 'default_acceleration_sps2', 100)
         self.remaining = 0
         self.executed = 0
+        self.position_full_steps = 0
+        self.position_session = getattr(platform, 'motion_session', lambda: None)()
         now = self.clock.ticks_ms()
         self.test_until = now
         self.last_sample = self.clock.ticks_add(now, -1000)
@@ -129,6 +131,8 @@ class Controller:
                 'max_step_lateness_us': self.motion.max_lateness_us if self.motion else 0,
                 'steps_remaining': self.remaining if self.mode in ('steps', 'braking') else None,
                 'steps_executed': self.executed, 'stop_reason': self.stop_reason,
+                'position_full_steps': self.position_full_steps,
+                'position_session': self.position_session,
                 'current_a': current, 'current_available': current is not None,
                 'board': self.board.name, 'board_id': self.board.id,
                 'mcu': self.board.mcu, 'driver': self.motor.name,
@@ -295,6 +299,7 @@ class Controller:
             self.motor.step(self.direction)
             self.motion.advanced()
             self.executed += 1
+            self.position_full_steps += self.direction / self.motor.resolutions[self.resolution]
             if self.mode in ('steps', 'braking'):
                 self.remaining -= 1
                 # Retain the final phase for one interval before release.

@@ -17,4 +17,5 @@ jobs:
       - run: node tests/test_song.cjs
       - run: node --check dist/gantry.js
       - run: node tests/test_gantry.cjs
+      - run: node tests/test_positions.cjs
       - run: python scripts/build_firmware.py
