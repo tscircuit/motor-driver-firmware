@@ -1,0 +1,40 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const vm=require('node:vm');
+const html=fs.readFileSync(require.resolve('../dist/single-motor.html'),'utf8');
+const listeners={},windowListeners={},nodes={};
+for(const [,id] of html.matchAll(/id="([^"]+)"/g))nodes[id]={value:id==='jogSpeed'?'150':id==='jogResolution'?'half':'',checked:false,tagName:'DIV',classList:{toggle(){}},addEventListener(){},blur(){}};
+const arrows=[...html.matchAll(/data-arrow="([^"]+)"/g)].map(([,key])=>({dataset:{arrow:key},classList:{toggle(){}},addEventListener(){}}));
+const sandbox={console,setTimeout,clearTimeout,setInterval(){},navigator:{serial:{}},window:{localStorage:{getItem(){return null;},setItem(){}},addEventListener(k,fn){windowListeners[k]=fn;}},document:{body:{dataset:{singleMotor:'true'}},hidden:false,getElementById(id){assert.ok(nodes[id],'Missing element '+id);return nodes[id];},querySelectorAll(){return arrows;},addEventListener(k,fn){listeners[k]=fn;}}};
+let source=fs.readFileSync(require.resolve('../dist/gantry.js'),'utf8');
+source=source.replace(" render();\n if(!navigator.serial)"," globalThis.testApi={axes,jog,positions};\n render();\n if(!navigator.serial)");
+vm.runInNewContext(source,sandbox);
+const {axes,jog,positions}=sandbox.testApi;
+assert.deepEqual(Object.keys(axes),['X']);
+assert.equal(positions.storageKey,'single-motor-position-slots-v1');
+const a=axes.X,calls=[];
+a.port={};a.seen=Date.now();a.last={protocol:3,temperature_c:25,motor_enabled:false,device_id:'one',position_session:'boot',position_full_steps:0,capabilities:{resolutions:{half:2},fixed_ramp_ms:400,deferred_start_supported:true,max_steps:100000}};
+a.send=async(cmd,fields)=>{calls.push({cmd,fields});if(cmd==='jog')a.last.motor_enabled=true;if(cmd==='stop')a.last.motor_enabled=false;};
+const event=key=>({key,code:key,repeat:false,target:{tagName:'BODY'},preventDefault(){}});
+const flush=()=>new Promise(r=>setImmediate(r));
+(async()=>{
+ for(const [key,direction] of [['ArrowUp',1],['ArrowRight',1],['ArrowDown',-1],['ArrowLeft',-1]]){
+  listeners.keydown(event(key));await flush();
+  assert.equal(calls.filter(c=>c.cmd==='jog').at(-1).fields.direction,direction,key);
+  listeners.keyup(event(key));await flush();assert.equal(calls.at(-2).cmd,'decelerate');
+  await jog.stop();
+ }
+ jog.press('ArrowUp');jog.press('ArrowLeft');await flush();await jog.tick(150,{});
+ assert.equal(jog.direction('X'),0);
+ await jog.stop();jog.press('ArrowRight');await flush();
+ windowListeners.blur();await flush();assert.equal(jog.held.size,0);assert.equal(calls.at(-2).cmd,'stop');
+ const before=calls.length;listeners.keydown({...event('ArrowUp'),target:{tagName:'INPUT',type:'number'}});await flush();assert.equal(calls.length,before);
+ jog.press('ArrowUp');await flush();listeners.keydown(event('Escape'));await flush();assert.equal(jog.held.size,0);
+ a.last.motor_enabled=false;assert.equal(positions.save(0),true);
+ a.last.position_full_steps=4;
+ a.send=async(cmd,fields)=>{calls.push({cmd,fields});if(cmd==='start')a.move=fields;if(cmd==='run_move'){a.last.motor_enabled=false;a.last.stop_reason='Step move complete';a.last.position_full_steps=0;}};
+ assert.equal(await positions.goto(0,150),true);
+ assert.equal(calls.findLast(c=>c.cmd==='start').fields.steps,8);
+ a.last.position_session='new';assert.equal(positions.valid(0),false);
+ console.log('PASS single-page DOM, all arrows on one motor, cancellation, release, blur/Escape, editing, single-position GOTO and session invalidation');
+})().catch(e=>{console.error(e);process.exitCode=1;});

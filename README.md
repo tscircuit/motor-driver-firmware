@@ -149,3 +149,7 @@ Upload updated `core/controller.py` and `platforms/micropython.py` for cumulativ
 GOTO sends one prepared finite trajectory per board, then runs both after both preparation acknowledgements. It does not send Stop or repeated status queries during the return. Shorter-axis speed scales by its distance divided by the longer-axis distance; 400 ms ramp scaling gives a common planned duration. Firmware pushes compact telemetry during motion and a full completion frame after stopping.
 
 Pulse deadlines preserve their planned phase through small scheduling delays, and only rebase after a whole missed period. Fixed profiles cache their constants and avoid per-step function allocations; the active loop sleep is 25 microseconds. Start-temperature checks apply before starting; ongoing motion follows the board's run-time thermal/fault checks, and a tone alarm alone does not stop a move.
+
+## Single-motor keyboard jogging
+
+Open `/single-motor.html` and connect one controller. Hold Up/Right to jog forward or Down/Left to jog backward. Release to decelerate; Space/Escape stops immediately. This page uses the gantry controller’s fixed 400 ms ramps, full/half stepping, speed setting, fault and focus-loss stops, and three SAVE/GOTO slots. Its saved positions use separate browser storage from the gantry. Run `node tests/test_single_motor.cjs` for the single-page regression test.
