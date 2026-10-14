@@ -37,4 +37,36 @@ const flush=()=>new Promise(r=>setImmediate(r));
  assert.equal(calls.findLast(c=>c.cmd==='start').fields.steps,8);
  a.last.position_session='new';assert.equal(positions.valid(0),false);
  console.log('PASS single-page DOM, all arrows on one motor, cancellation, release, blur/Escape, editing, single-position GOTO and session invalidation');
+ const resolutions={sixteenth:16,half:2,quarter:4,full:1,eighth:8};
+ const modern={type:'telemetry',protocol:3,temperature_c:25,motor_enabled:false,device_id:'one',position_session:'microboot',position_full_steps:0,pd_voltage_requested:5,motor_power_ready:false,led_selection:'auto',led_color:'green',winding_current_a:[0.42,-0.63],capabilities:{resolutions,full_steps_per_revolution:200,fixed_ramp_ms:400,deferred_start_supported:true,max_steps:100000,pd_voltages:[5,9,12,15,20],led_colors:['off','red','green','blue','cyan'],step_note:'Fixed 1/16 hardware microsteps.',current_note:'Uncalibrated samples.'}};
+ a.receive(JSON.stringify(modern));jog.update();
+ assert.deepEqual(Array.from(nodes.jogResolution.children,o=>o.value),['full','half','quarter','eighth','sixteenth']);
+ assert.match(nodes.jogResolution.children.at(-1).textContent,/1\/16.*0.1125°/);
+ assert.equal(nodes.jogResolution.disabled,false);assert.equal(nodes.hardwareX.hidden,false);
+ assert.match(nodes.windingCurrent.textContent,/A: 0.42 A · B: -0.63 A/);
+ assert.equal(nodes.pdVoltageMeasured.textContent,'Unavailable');
+ a.last.pd_voltage_measured=8.92;jog.update();assert.equal(nodes.pdVoltageMeasured.textContent,'8.92 V');
+ a.last.pd_voltage_measured=null;jog.update();assert.equal(nodes.pdVoltageMeasured.textContent,'Unavailable');
+ assert.ok(arrows.every(button=>button.disabled));assert.equal(nodes.setPdX.disabled,false);
+ a.send=async(cmd,fields)=>{calls.push({cmd,fields});if(cmd==='set_pd_voltage'){a.last.pd_voltage_requested=fields.voltage;a.last.motor_power_ready=true;}if(cmd==='jog')a.last.motor_enabled=true;if(cmd==='stop'||cmd==='decelerate')a.last.motor_enabled=false;if(cmd==='start')a.move=fields;if(cmd==='run_move'){a.last.position_full_steps+=a.move.direction*a.move.steps/resolutions[a.move.resolution];a.last.motor_enabled=false;a.last.stop_reason='Step move complete';}};
+ nodes.ledX.value='cyan';await nodes.setLedX.onclick();assert.equal(calls.findLast(c=>c.cmd==='set_led').fields.color,'cyan');
+ nodes.pdX.value='9';await nodes.setPdX.onclick();assert.equal(calls.findLast(c=>c.cmd==='set_pd_voltage').fields.voltage,9);
+ for(const [mode,rpm] of [['quarter','11.25'],['eighth','5.63'],['sixteenth','2.81']]){
+  nodes.jogResolution.value=mode;nodes.jogResolution.onchange();
+  assert.match(nodes.jogSpeedEstimate.textContent,new RegExp(rpm+' nominal RPM'));
+  listeners.keydown(event('ArrowRight'));await flush();
+  assert.equal(calls.findLast(c=>c.cmd==='jog').fields.resolution,mode);jog.update();assert.equal(nodes.setPdX.disabled,true);
+  listeners.keyup(event('ArrowRight'));await flush();await jog.stop();
+ }
+ nodes.jogResolution.value='quarter';nodes.jogResolution.onchange();
+ a.last.position_full_steps=0;assert.equal(positions.save(0),true);a.last.position_full_steps=0.0625;
+ await nodes.gotoPosition0.onclick();await flush();
+ const microReturn=calls.findLast(c=>c.cmd==='start').fields;
+ assert.equal(microReturn.resolution,'sixteenth');assert.equal(microReturn.steps,1);assert.equal(microReturn.speed_sps,600);
+ assert.equal(a.last.position_full_steps,0);
+ a.last.capabilities={...modern.capabilities,resolutions:{full:1,half:2},pd_voltages:[],led_colors:[]};jog.update();
+ assert.deepEqual(Array.from(nodes.jogResolution.children,o=>o.value),['full','half']);assert.equal(nodes.hardwareX.hidden,true);
+ a.seen=0;jog.update();assert.equal(nodes.jogResolution.disabled,true);assert.equal(nodes.setLedX.disabled,true);assert.equal(nodes.setPdX.disabled,true);
+ console.log('PASS DRV8825 step labels, quarter/microstep jogging, RPM estimates, RGB/PD commands, current readings, exact microstep GOTO speed, legacy and stale gating');
+
 })().catch(e=>{console.error(e);process.exitCode=1;});
