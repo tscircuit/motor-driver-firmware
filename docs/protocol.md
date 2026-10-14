@@ -87,3 +87,13 @@ Automatic moving telemetry has `compact: true` and omits static capabilities/ide
 - `winding_current_a`: two signed nominal INA240 samples, or null on clipping/read failure. `current_a` is their vector magnitude in amps. These readings are uncalibrated, instantaneous and not supply current; motion telemetry includes refreshed samples.
 
 The new board supports `full:1`, `half:2`, `quarter:4`, `eighth:8`, `sixteenth:16`. Hardware MODE pins fix 1/16 microsteps; the selected increment groups STEP pulses. Existing counts, speed and commanded full-step coordinates retain their protocol meaning.
+
+## Native C / PIO firmware
+
+The DRV8825/RGB native application retains protocol 3 and all dashboard commands. Full telemetry adds `firmware: "native-c-pio"`, `firmware_version`, and `firmware_build` (source/configuration fingerprint). `capabilities.hardware_pulse_timing` is true and `max_step_pulse_hz` is 200000. Speed remains selected increments/sec, but requests are rejected when `speed_sps * 16 / resolution_factor` exceeds that hardware pulse limit. Minimum selected speed is 0.01 increments/sec.
+
+`pulse_rate_hz` measures emitted STEP pulses over approximately 100 ms, not shaft speed. `pulse_queue_underruns` counts unexpected PIO FIFO starvation. Native legacy scheduler lateness fields remain zero; there is no cooperative per-step scheduler. Position counts emitted electrical pulses, including partially executed selected increments. Compact frames include resolution, steps/revolution, target speed, acceleration and direction to keep live units current.
+
+`test_pulses` accepts integer `pulses` from 1 to 100000 and finite `pulse_hz` from 1 to 200000 while stopped. It keeps the motor driver disabled, outputs STEP pulses only, and applies ordinary heartbeat, USB, driver and temperature protections. Completion reports `pulse_test_pulses` and `pulse_test_elapsed_us`. Tests do not advance the commanded motor position.
+
+`bootloader` stops the driver and enters the UF2 bootloader. Setting CDC baud to 1200 also requests BOOTSEL. See [native build/install/safety guide](../firmware-c/README.md).

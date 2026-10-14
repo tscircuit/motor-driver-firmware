@@ -1,0 +1,677 @@
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#ifdef MOTOR_HOST_TEST
+#define FIRMWARE_BUILD_ID "host-test"
+#include "test_platform.h"
+#else
+#include "build_id.h"
+#include "hardware/adc.h"
+#include "hardware/i2c.h"
+#include "hardware/pwm.h"
+#include "hardware/resets.h"
+#include "hardware/watchdog.h"
+#include "pico/bootrom.h"
+#include "pico/rand.h"
+#include "pico/stdlib.h"
+#include "pico/unique_id.h"
+#include "tusb.h"
+#endif
+#include "motor.h"
+#include "settings.h"
+#include "vendor/cJSON.h"
+
+#define SENSOR_ADDRESS 0x48
+#define SENSOR_CONFIG 0x60c0
+#define SENSOR_MASK 0x7fd0
+#define HEARTBEAT_US 1500000u
+static const char *colors[] = {"off", "red", "green", "blue", "yellow", "cyan", "magenta", "white"};
+static const uint8_t color_bits[] = {0, 1, 2, 4, 3, 6, 5, 7};
+static const char *resolutions[] = {"full", "half", "quarter", "eighth", "sixteenth"};
+static const char *modes[] = {"stopped", "prepared", "steps", "continuous", "braking", "test"};
+static char device_id[17], session[33], stop_reason[96] = "Boot: motor disabled";
+static uint64_t boot_us, heartbeat_us, last_sample, last_emit, test_until, restart_at, power_at;
+static bool heartbeat_seen, temperature_valid, alarm, sensor_initialized;
+static double temperature;
+static int pd_voltage = 5, led_selection = -1, led_bits, buzzer_frequency;
+static uint16_t song_hz[48], song_ms[48];
+static size_t song_length, song_index;
+static uint64_t song_until;
+static uint32_t diagnostic_pulses, diagnostic_elapsed;
+static motor_mode_t previous_mode = STOPPED;
+extern volatile bool usb_boot_requested;
+
+static void stop(const char *reason) {
+    motor_stop();
+    song_length = 0;
+    snprintf(stop_reason, sizeof(stop_reason), "%s", reason);
+}
+static bool power_ready(void) { return pd_voltage >= 9 && time_us_64() >= power_at; }
+static bool driver_fault(void) { return !gpio_get(23); }
+static bool read_reg(uint8_t reg, uint16_t *value) {
+    uint8_t bytes[2];
+    if (i2c_write_timeout_us(i2c1, SENSOR_ADDRESS, &reg, 1, true, 2000) != 1 ||
+        i2c_read_timeout_us(i2c1, SENSOR_ADDRESS, bytes, 2, false, 2000) != 2)
+        return false;
+    *value = (bytes[0] << 8) | bytes[1];
+    return true;
+}
+static bool write_reg(uint8_t reg, uint16_t value) {
+    uint8_t bytes[] = {reg, value >> 8, value};
+    return i2c_write_timeout_us(i2c1, SENSOR_ADDRESS, bytes, 3, false, 2000) == 3;
+}
+static bool sensor_verify(void) {
+    uint16_t config, low, high;
+    return read_reg(1, &config) && (config & SENSOR_MASK) == (SENSOR_CONFIG & SENSOR_MASK) &&
+           read_reg(2, &low) && low == (60u * 256) && read_reg(3, &high) && high == (75u * 256);
+}
+static void sample(void) {
+    uint16_t raw;
+    temperature_valid = sensor_initialized && sensor_verify() && read_reg(0, &raw) && !(raw & 15);
+    if (temperature_valid) {
+        temperature = (int16_t)raw / 256.0;
+        temperature_valid = temperature >= -40 && temperature <= 125;
+    }
+    if (!temperature_valid || temperature >= settings.threshold)
+        alarm = true;
+    else if (temperature < settings.threshold - 2)
+        alarm = false;
+    last_sample = time_us_64();
+}
+static void buzzer(int hz) {
+    if (hz == buzzer_frequency)
+        return;
+    uint slice = pwm_gpio_to_slice_num(16);
+    pwm_set_enabled(slice, false);
+    gpio_put(16, 0);
+    if (hz) {
+        /* 1 MHz PWM tick; duty cycle 50%. */
+        pwm_set_clkdiv(slice, 125.0f);
+        pwm_set_wrap(slice, 1000000 / hz - 1);
+        pwm_set_gpio_level(16, (1000000 / hz) / 2);
+        pwm_set_enabled(slice, true);
+    } else {
+        pwm_set_gpio_level(16, 0);
+    }
+    buzzer_frequency = hz;
+}
+static void indicators(uint64_t now, motor_status_t s) {
+    bool fault = alarm || driver_fault();
+    led_bits = fault                ? ((now / 125000) % 2 ? 1 : 0)
+               : led_selection >= 0 ? color_bits[led_selection]
+               : s.mode == STOPPED  ? 2
+                                    : 4;
+    gpio_put(25, led_bits & 1);
+    gpio_put(2, led_bits & 2);
+    gpio_put(3, led_bits & 4);
+    if (alarm) {
+        song_length = 0;
+        buzzer((now / 1000) % 1000 < 180 ? 2731 : 0);
+        return;
+    }
+    if (song_length && now >= song_until) {
+        if (++song_index >= song_length)
+            song_length = 0;
+        else
+            song_until = now + (uint64_t)song_ms[song_index] * 1000;
+    }
+    buzzer(song_length ? song_hz[song_index] : now < test_until ? 2731 : 0);
+}
+static const char *color_name(void) {
+    for (int i = 0; i < 8; ++i)
+        if (color_bits[i] == led_bits)
+            return colors[i];
+    return "off";
+}
+static const char *resolution_name(int factor) {
+    for (int i = 0; i < 5; ++i)
+        if ((1 << i) == factor)
+            return resolutions[i];
+    return "full";
+}
+static void add_bool(cJSON *o, const char *k, bool v) { cJSON_AddBoolToObject(o, k, v); }
+static void add_number(cJSON *o, const char *k, double v) { cJSON_AddNumberToObject(o, k, v); }
+static void add_string(cJSON *o, const char *k, const char *v) { cJSON_AddStringToObject(o, k, v); }
+static void null(cJSON *o, const char *k) { cJSON_AddNullToObject(o, k); }
+/* Nonblocking bounded USB output: motion/protection never wait for a host
+   reading CDC. A frame is either accepted whole, or dropped whole. */
+static bool emit(cJSON *o) {
+    char *text = cJSON_PrintUnformatted(o);
+    bool ok = false;
+    if (text) {
+        size_t n = strlen(text);
+        cJSON *kind = cJSON_GetObjectItemCaseSensitive(o, "type");
+        size_t reserve = cJSON_IsString(kind) && strcmp(kind->valuestring, "ack") == 0 ? 0 : 768;
+        if (tud_cdc_connected() && n + 1 + reserve <= tud_cdc_write_available()) {
+            tud_cdc_write(text, n);
+            tud_cdc_write_char('\n');
+            tud_cdc_write_flush();
+            ok = true;
+        }
+        free(text);
+    }
+    cJSON_Delete(o);
+    return ok;
+}
+static void currents(cJSON *o) {
+    double readings[2];
+    bool valid = true;
+    cJSON *array = cJSON_CreateArray();
+    for (int i = 0; i < 2; ++i) {
+        adc_select_input(2 + i);
+        uint16_t raw = adc_read();
+        if (raw < 16 || raw > 4079)
+            valid = false;
+        readings[i] = raw * 3.3 / 4095 - 1.65;
+        cJSON_AddItemToArray(array, cJSON_CreateNumber(readings[i]));
+    }
+    if (valid) {
+        cJSON_AddItemToObject(o, "winding_current_a", array);
+        add_number(o, "current_a", hypot(readings[0], readings[1]));
+    } else {
+        cJSON_Delete(array);
+        null(o, "winding_current_a");
+        null(o, "current_a");
+    }
+    add_bool(o, "current_available", valid);
+}
+static cJSON *capabilities(void) {
+    cJSON *c = cJSON_CreateObject(), *r = cJSON_CreateObject();
+    for (int i = 0; i < 5; ++i)
+        add_number(r, resolutions[i], 1 << i);
+    cJSON_AddItemToObject(c, "resolutions", r);
+    cJSON_AddItemToObject(c, "led_colors", cJSON_CreateStringArray(colors, 8));
+    int volts[] = {5, 9, 12, 15, 20};
+    cJSON_AddItemToObject(c, "pd_voltages", cJSON_CreateIntArray(volts, 5));
+    add_number(c, "full_steps_per_revolution", 200);
+    add_number(c, "min_speed_sps", MIN_SPEED_SPS);
+    null(c, "max_speed_sps");
+    add_number(c, "max_step_pulse_hz", MAX_PULSE_HZ);
+    add_number(c, "max_steps", MAX_MOVE_STEPS);
+    add_bool(c, "acceleration_supported", true);
+    add_bool(c, "deceleration_supported", true);
+    add_bool(c, "jog_update_supported", true);
+    add_bool(c, "deferred_start_supported", true);
+    add_number(c, "fixed_ramp_ms", 400);
+    add_number(c, "min_acceleration_sps2", 10);
+    add_number(c, "max_acceleration_sps2", 1000);
+    add_number(c, "default_acceleration_sps2", 100);
+    add_number(c, "start_below_c", 60);
+    add_number(c, "shutdown_c", 75);
+    add_number(c, "threshold_min_c", 10);
+    add_number(c, "threshold_max_c", 74);
+    add_number(c, "heartbeat_timeout_ms", 1500);
+    add_number(c, "buzzer_hz", 2731);
+    add_bool(c, "song_supported", true);
+    add_string(c, "song_format", "u16le-hz-u16le-ms");
+    add_number(c, "song_max_bytes", 192);
+    add_bool(c, "hardware_pulse_timing", true);
+    add_bool(c, "pulse_test_supported", true);
+    add_string(c, "step_note",
+               "Fixed 1/16 hardware microsteps. PIO generates evenly spaced physical pulses at up "
+               "to 200000 Hz; selected increments group pulses.");
+    add_string(c, "current_note",
+               "Nominal INA240 winding samples; uncalibrated, instantaneous, not supply current.");
+    return c;
+}
+static void status(bool compact) {
+    motor_status_t s = motor_status();
+    cJSON *o = cJSON_CreateObject();
+    add_string(o, "type", "telemetry");
+    add_number(o, "protocol", 3);
+    if (compact)
+        add_bool(o, "compact", true);
+    if (temperature_valid)
+        add_number(o, "temperature_c", temperature);
+    else
+        null(o, "temperature_c");
+    add_bool(o, "motor_enabled", s.enabled);
+    add_string(o, "motion_mode", modes[s.mode]);
+    if (temperature_valid)
+        null(o, "sensor_error");
+    else
+        add_string(o, "sensor_error", "TMP102 unavailable or protection configuration changed");
+    add_bool(o, "alarm_active", alarm);
+    add_bool(o, "thermal_alert", false);
+    add_bool(o, "driver_fault_asserted", driver_fault());
+    add_number(o, "pulse_queue_underruns", s.queue_underruns);
+    add_string(o, "step_resolution", resolution_name(s.factor));
+    add_number(o, "steps_per_revolution", 200 * s.factor);
+    add_number(o, "direction", s.direction);
+    add_number(o, "speed_sps", s.speed);
+    add_number(o, "acceleration_sps2", s.acceleration);
+    add_number(o, "profile_speed_sps", s.profile_speed);
+    add_number(o, "pulse_rate_hz", s.pulse_rate);
+    add_number(o, "position_full_steps", s.position_microsteps / 16.0);
+    add_string(o, "stop_reason", stop_reason);
+    add_number(o, "pd_voltage_requested", pd_voltage);
+    null(o, "pd_voltage_measured");
+    add_bool(o, "motor_power_ready", power_ready());
+    currents(o);
+    add_string(o, "led_color", color_name());
+    if (!compact) {
+        add_string(o, "firmware", "native-c-pio");
+        add_string(o, "firmware_version", "1.0.0");
+        add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
+        add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
+        add_string(o, "device_name", settings.name);
+        add_string(o, "usb_name", settings.name);
+        add_bool(o, "usb_name_supported", true);
+        null(o, "usb_name_error");
+        add_string(o, "device_id", device_id);
+        add_string(o, "position_session", session);
+        add_bool(o, "restarting", restart_at != 0);
+        add_bool(o, "led_on", led_bits != 0);
+        add_string(o, "led_mode", alarm ? "alarm" : s.mode != STOPPED ? "running" : "off");
+        add_string(o, "led_selection", led_selection < 0 ? "auto" : colors[led_selection]);
+        add_number(o, "threshold_c", settings.threshold);
+        add_bool(o, "buzzer_on", buzzer_frequency != 0);
+        add_number(o, "buzzer_frequency_hz", buzzer_frequency);
+        add_bool(o, "song_playing", song_length != 0);
+        add_number(o, "song_note", song_length ? song_index + 1 : 0);
+        cJSON_AddItemToObject(o, "supported_resolutions", cJSON_CreateStringArray(resolutions, 5));
+        add_number(o, "late_steps", 0);
+        add_number(o, "max_step_lateness_us", 0);
+        if (s.mode == FINITE || s.mode == BRAKING)
+            add_number(o, "steps_remaining",
+                       (s.target_pulses - s.executed_pulses) / (16 / s.factor));
+        else
+            null(o, "steps_remaining");
+        add_number(o, "steps_executed", s.executed_pulses / (16 / s.factor));
+        add_number(o, "hardware_pulses_executed", s.executed_pulses);
+        add_number(o, "pulse_test_pulses", diagnostic_pulses);
+        add_number(o, "pulse_test_elapsed_us", diagnostic_elapsed);
+        add_string(o, "board", "RP2040 / DRV8825 / RGB");
+        add_string(o, "board_id", "rp2040_drv8825");
+        add_string(o, "mcu", "RP2040");
+        add_string(o, "driver", "DRV8825");
+        cJSON_AddItemToObject(o, "capabilities", capabilities());
+    }
+    emit(o);
+}
+static void ack(cJSON *id, const char *error) {
+    cJSON *o = cJSON_CreateObject();
+    add_string(o, "type", "ack");
+    cJSON_AddItemToObject(o, "id", id ? cJSON_Duplicate(id, true) : cJSON_CreateNull());
+    add_bool(o, "ok", !error);
+    if (error)
+        add_string(o, "error", error);
+    else {
+        add_number(o, "threshold_c", settings.threshold);
+        add_string(o, "device_name", settings.name);
+        add_bool(o, "restarting", restart_at != 0);
+    }
+    emit(o);
+}
+static const char *string(cJSON *o, const char *key) {
+    cJSON *v = cJSON_GetObjectItemCaseSensitive(o, key);
+    return cJSON_IsString(v) ? v->valuestring : NULL;
+}
+static bool number(cJSON *o, const char *key, double *out) {
+    cJSON *v = cJSON_GetObjectItemCaseSensitive(o, key);
+    if (!cJSON_IsNumber(v) || !isfinite(v->valuedouble))
+        return false;
+    *out = v->valuedouble;
+    return true;
+}
+static bool matches(const char *s, const char *value) { return s && strcmp(s, value) == 0; }
+static bool recent_heartbeat(void) {
+    return heartbeat_seen && time_us_64() - heartbeat_us <= 1000000;
+}
+static const char *motion_command(cJSON *c, bool jog) {
+    motor_status_t s = motor_status();
+    if (restart_at)
+        return "Restart pending";
+    if ((jog && (s.mode == FINITE || s.mode == PREPARED || s.mode == DIAGNOSTIC)) ||
+        (!jog && s.mode != STOPPED))
+        return "Stop current movement first";
+    int factor = resolution_factor(string(c, "resolution"));
+    if (!factor && !cJSON_HasObjectItem(c, "resolution"))
+        factor = jog ? s.factor : 1;
+    double speed, direction, acceleration = 100, count = 0;
+    if (!number(c, "speed_sps", &speed) || !number(c, "direction", &direction) ||
+        (direction != 1 && direction != -1))
+        return "Invalid speed or direction";
+    bool fixed = cJSON_HasObjectItem(c, "ramp_ms");
+    if (fixed) {
+        double ramp;
+        if (!number(c, "ramp_ms", &ramp) || ramp != 400)
+            return "Ramp duration is fixed at 400 ms";
+        acceleration = speed / 0.4;
+    } else if (cJSON_HasObjectItem(c, "acceleration_sps2") &&
+               (!number(c, "acceleration_sps2", &acceleration) || acceleration < 10 ||
+                acceleration > 1000))
+        return "Acceleration must be 10-1000";
+    bool finite = !jog && matches(string(c, "mode"), "steps");
+    if (!jog && !finite && !matches(string(c, "mode"), "continuous"))
+        return "Unknown motion mode";
+    if (finite && (!number(c, "steps", &count) || count < 1 || count > MAX_MOVE_STEPS ||
+                   floor(count) != count))
+        return "Steps must be an integer from 1-100000";
+    cJSON *defer_item = cJSON_GetObjectItemCaseSensitive(c, "defer");
+    bool defer = cJSON_IsTrue(defer_item);
+    if ((defer_item && !cJSON_IsBool(defer_item)) || (defer && (!finite || jog)))
+        return "Only finite moves can be prepared";
+    if (!profile_validate(speed, acceleration, factor, (uint32_t)count))
+        return "Unsupported resolution or speed exceeds 200000 hardware pulses/sec";
+    if (!recent_heartbeat())
+        return "Waiting for browser heartbeat";
+    if (!power_ready())
+        return "Select motor power and wait two seconds";
+    sample();
+    if (!temperature_valid || temperature >= 60)
+        return "Temperature must be valid and below 60 C";
+    if (driver_fault())
+        return "Driver fault";
+    bool ok = (jog && s.mode != STOPPED)
+                  ? motor_retarget(factor, (int)direction, speed, acceleration, fixed)
+                  : motor_start(factor, (int)direction, speed, acceleration, (uint32_t)count, fixed,
+                                defer, jog);
+    if (!ok)
+        return "Motion request rejected";
+    song_length = 0;
+    stop_reason[0] = 0;
+    previous_mode = defer ? PREPARED : finite ? FINITE : CONTINUOUS;
+    return NULL;
+}
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F')
+        return c - 'A' + 10;
+    return -1;
+}
+static const char *load_song(const char *hex) {
+    if (!hex || !strlen(hex) || strlen(hex) > 384 || strlen(hex) % 8)
+        return "Use 1-48 four-byte notes";
+    uint8_t data[192];
+    size_t bytes = strlen(hex) / 2;
+    for (size_t i = 0; i < bytes; ++i) {
+        int a = hex_digit(hex[2 * i]), b = hex_digit(hex[2 * i + 1]);
+        if (a < 0 || b < 0)
+            return "Invalid song hex";
+        data[i] = (a << 4) | b;
+    }
+    uint32_t total = 0;
+    for (size_t i = 0; i < bytes / 4; ++i) {
+        uint16_t hz = data[4 * i] | data[4 * i + 1] << 8,
+                 ms = data[4 * i + 2] | data[4 * i + 3] << 8;
+        if ((hz && (hz < 100 || hz > 10000)) || ms < 20 || ms > 5000)
+            return "Invalid note frequency or duration";
+        total += ms;
+    }
+    if (total > 60000)
+        return "Song exceeds 60 seconds";
+    for (size_t i = 0; i < bytes / 4; ++i) {
+        song_hz[i] = data[4 * i] | data[4 * i + 1] << 8;
+        song_ms[i] = data[4 * i + 2] | data[4 * i + 3] << 8;
+    }
+    song_length = bytes / 4;
+    song_index = 0;
+    song_until = time_us_64() + (uint64_t)song_ms[0] * 1000;
+    test_until = 0;
+    return NULL;
+}
+static void command(const char *line) {
+    const char *end;
+    cJSON *c = cJSON_ParseWithOpts(line, &end, true);
+    if (!cJSON_IsObject(c)) {
+        cJSON_Delete(c);
+        ack(NULL, "Expected a JSON object");
+        return;
+    }
+    const char *cmd = string(c, "cmd"), *error = NULL;
+    cJSON *id = cJSON_GetObjectItemCaseSensitive(c, "id");
+    motor_status_t s = motor_status();
+    if (matches(cmd, "heartbeat")) {
+        heartbeat_us = time_us_64();
+        heartbeat_seen = true;
+        cJSON_Delete(c);
+        return;
+    }
+    if (matches(cmd, "stop"))
+        stop("Stopped by user");
+    else if (matches(cmd, "status"))
+        status(false);
+    else if (matches(cmd, "start") || matches(cmd, "jog"))
+        error = motion_command(c, matches(cmd, "jog"));
+    else if (matches(cmd, "run_move")) {
+        sample();
+        if (!recent_heartbeat() || !temperature_valid || temperature >= 60 || driver_fault() ||
+            !power_ready()) {
+            stop("Prepared move failed safety check");
+            error = "Prepared move failed safety check";
+        } else if (!motor_run_prepared())
+            error = "No prepared move";
+        else
+            previous_mode = FINITE;
+    } else if (matches(cmd, "decelerate")) {
+        if (s.mode == CONTINUOUS) {
+            motor_decelerate();
+            previous_mode = BRAKING;
+        } else if (s.mode != STOPPED && s.mode != BRAKING)
+            error = "Deceleration requires continuous motion";
+    } else if (matches(cmd, "set_pd_voltage")) {
+        double voltage;
+        if (s.mode != STOPPED || restart_at)
+            error = "Stop motor before changing voltage";
+        else if (!number(c, "voltage", &voltage) ||
+                 (voltage != 5 && voltage != 9 && voltage != 12 && voltage != 15 && voltage != 20))
+            error = "Choose 5, 9, 12, 15 or 20 V";
+        else {
+            motor_stop();
+            int code = voltage == 5    ? 0
+                       : voltage == 9  ? 7
+                       : voltage == 12 ? 3
+                       : voltage == 15 ? 1
+                                       : 5;
+            gpio_put(4, 0);
+            gpio_put(5, code & 2);
+            gpio_put(6, code & 4);
+            gpio_put(4, code & 1);
+            pd_voltage = (int)voltage;
+            power_at = time_us_64() + 2000000;
+        }
+    } else if (matches(cmd, "set_led")) {
+        const char *color = string(c, "color");
+        int next = -2;
+        if (matches(color, "auto"))
+            next = -1;
+        for (int i = 0; i < 8; ++i)
+            if (matches(color, colors[i]))
+                next = i;
+        if (next == -2)
+            error = "Unsupported LED color";
+        else
+            led_selection = next;
+    } else if (matches(cmd, "set_threshold") || matches(cmd, "set_device_name")) {
+        if (s.mode != STOPPED || restart_at)
+            error = "Stop motor before saving settings";
+        else {
+            settings_t next = settings;
+            if (matches(cmd, "set_threshold")) {
+                double threshold;
+                if (!number(c, "threshold_c", &threshold) || threshold < 10 || threshold > 74)
+                    error = "Threshold must be 10-74 C";
+                else
+                    next.threshold = threshold;
+            } else {
+                const char *name = string(c, "name");
+                if (!name || !settings_name_valid(name))
+                    error = "Use 1-32 printable ASCII characters without surrounding spaces";
+                else
+                    snprintf(next.name, sizeof(next.name), "%s", name);
+            }
+            if (!error) {
+                motor_stop();
+                if (!settings_save(&next))
+                    error = "Settings flash write failed";
+                else if (matches(cmd, "set_device_name")) {
+                    stop("Restarting to apply USB name");
+                    restart_at = time_us_64() + 750000;
+                }
+            }
+        }
+    } else if (matches(cmd, "play_song")) {
+        sample();
+        if (s.mode != STOPPED || restart_at || alarm)
+            error = "Stop motor; alarms take priority over songs";
+        else
+            error = load_song(string(c, "hex"));
+    } else if (matches(cmd, "stop_song")) {
+        song_length = 0;
+        test_until = 0;
+    } else if (matches(cmd, "beep")) {
+        song_length = 0;
+        test_until = time_us_64() + 600000;
+    } else if (matches(cmd, "test_pulses")) {
+        double pulses, hz;
+        if (s.mode != STOPPED || restart_at)
+            error = "Stop motor before pulse test";
+        else if (!number(c, "pulses", &pulses) || pulses < 1 || pulses > MAX_MOVE_STEPS ||
+                 floor(pulses) != pulses || !number(c, "pulse_hz", &hz))
+            error = "Invalid pulse test";
+        else if (!motor_test((uint32_t)pulses, hz))
+            error = "Pulse test rate must be 1-200000 Hz";
+        else {
+            stop_reason[0] = 0;
+            diagnostic_pulses = diagnostic_elapsed = 0;
+            previous_mode = DIAGNOSTIC;
+        }
+    } else if (matches(cmd, "bootloader")) {
+        stop("Entering bootloader");
+        usb_boot_requested = true;
+    } else
+        error = "Unknown command";
+    ack(id, error);
+    cJSON_Delete(c);
+}
+static void protect(uint64_t now, motor_status_t s) {
+    if (s.mode != STOPPED) {
+        if (!temperature_valid)
+            stop("Temperature sensor error");
+        else if (temperature >= 75)
+            stop("Thermal shutdown");
+        else if (driver_fault())
+            stop("Driver fault");
+        else if (!heartbeat_seen || now - heartbeat_us > HEARTBEAT_US)
+            stop("Browser heartbeat lost");
+        else if (!tud_cdc_connected())
+            stop("USB disconnected");
+    }
+}
+static void safe_gpio(void) {
+    const int pins[] = {22, 21, 18, 19, 20, 4, 5, 6, 25, 2, 3, 16};
+    for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]); ++i) {
+        gpio_init(pins[i]);
+        gpio_put(pins[i], pins[i] == 21);
+        gpio_set_dir(pins[i], GPIO_OUT);
+    }
+    gpio_init(23);
+    gpio_set_dir(23, GPIO_IN); /* PCB supplies nFAULT pull-up. */
+}
+int main(void) {
+    safe_gpio();
+    /* BOOTSEL leaves USB attached. Hold reset long enough for the host to
+       observe a real disconnect before TinyUSB enumerates the CDC device. */
+    reset_block(RESETS_RESET_USBCTRL_BITS);
+    sleep_ms(250);
+    boot_us = time_us_64();
+    settings_load();
+    pico_get_unique_board_id_string(device_id, sizeof(device_id));
+    for (size_t i = 0; device_id[i]; ++i)
+        if (device_id[i] >= 'A' && device_id[i] <= 'F')
+            device_id[i] += 'a' - 'A';
+    snprintf(session, sizeof(session), "%s-%08lx", device_id, (unsigned long)get_rand_32());
+    motor_init();
+    if (!settings_has_saved())
+        settings_save(&settings);
+    adc_init();
+    adc_gpio_init(28);
+    adc_gpio_init(29);
+    i2c_init(i2c1, 100000);
+    gpio_set_function(26, GPIO_FUNC_I2C);
+    gpio_set_function(27, GPIO_FUNC_I2C);
+    gpio_pull_up(26);
+    gpio_pull_up(27);
+    sensor_initialized = write_reg(1, SENSOR_CONFIG) && write_reg(2, 60 * 256) &&
+                         write_reg(3, 75 * 256) && sensor_verify();
+    sleep_ms(300);
+    sample();
+    gpio_set_function(16, GPIO_FUNC_PWM);
+    tusb_init();
+    watchdog_enable(2000, true);
+    char line[513];
+    size_t length = 0;
+    bool overflow = false;
+    uint64_t connection_lost_at = 0;
+    while (true) {
+        tud_task();
+        uint64_t now = time_us_64();
+        if (usb_boot_requested) {
+            stop("Entering bootloader");
+            reset_usb_boot(0, 0);
+        }
+        if (restart_at && now >= restart_at) {
+            stop("Restarting");
+            watchdog_reboot(0, 0, 0);
+            while (true)
+                tight_loop_contents();
+        }
+        if (now - last_sample >= 100000)
+            sample();
+        motor_status_t s = motor_status();
+        protect(now, s);
+        if (!tud_cdc_connected()) {
+            if (!connection_lost_at)
+                connection_lost_at = now;
+        } else
+            connection_lost_at = 0;
+        /* Bound input work per loop so a flooding host cannot starve protection. */
+        for (int i = 0; i < 128 && tud_cdc_available(); ++i) {
+            char ch = (char)tud_cdc_read_char();
+            if (ch == '\n') {
+                if (overflow)
+                    ack(NULL, "Command exceeds 512 bytes");
+                else if (length) {
+                    line[length] = 0;
+                    command(line);
+                }
+                length = 0;
+                overflow = false;
+            } else if (ch != '\r') {
+                if (ch == '\0')
+                    overflow = true;
+                else if (length < 512 && !overflow)
+                    line[length++] = ch;
+                else
+                    overflow = true;
+            }
+        }
+        s = motor_status();
+        if (previous_mode != STOPPED && s.mode == STOPPED) {
+            if (!stop_reason[0])
+                snprintf(stop_reason, sizeof(stop_reason), "%s",
+                         previous_mode == DIAGNOSTIC ? "Pulse test complete"
+                         : previous_mode == BRAKING  ? "Jog release complete"
+                                                     : "Step move complete");
+            if (previous_mode == DIAGNOSTIC) {
+                diagnostic_pulses = s.executed_pulses;
+                diagnostic_elapsed = s.elapsed_us;
+            }
+            status(false);
+            last_emit = now;
+        }
+        previous_mode = s.mode;
+        indicators(now, s);
+        if (now - last_emit >= 250000) {
+            status(s.mode != STOPPED && s.mode != PREPARED);
+            last_emit = now;
+        }
+        watchdog_update();
+        sleep_us(50);
+    }
+}

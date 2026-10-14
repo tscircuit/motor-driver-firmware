@@ -1,0 +1,4 @@
+#ifndef MOTOR_BUILD_ID_H
+#define MOTOR_BUILD_ID_H
+#define FIRMWARE_BUILD_ID "@FIRMWARE_BUILD_ID@"
+#endif
