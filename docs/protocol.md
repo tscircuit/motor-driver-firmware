@@ -76,3 +76,14 @@ The RP2040 profile reports `min_speed_sps: 0`, `max_speed_sps: null`: speeds mus
 `deferred_start_supported: true` enables `start` with `mode: "steps"`, `defer: true`. It validates and prepares the finite profile, energizes the retained motor phase, and reports `motion_mode: "prepared"` without stepping. `run_move` starts its timing from receipt; Stop or faults cancel preparation. Clients prepare both axes before dispatching both run commands.
 
 Automatic moving telemetry has `compact: true` and omits static capabilities/identity; merge it into the last full snapshot. Full `status` replies and completion frames replace that snapshot. Continuous status polling during motion is unnecessary.
+
+
+## DRV8825 RGB / USB-PD additions (protocol 3)
+
+`capabilities.led_colors` and `capabilities.pd_voltages` advertise controls; absent/empty fields leave older boards unchanged.
+
+- `set_led`: `color` is `auto` or one advertised color. Alarms and driver/sensor faults override manual colors. Telemetry includes `led_selection` and `led_color`.
+- `set_pd_voltage`: `voltage` is one advertised value (5, 9, 12, 15, 20). Requires the motor stopped and no pending restart; disables the driver before changing selectors. Telemetry includes `pd_voltage_requested`, `motor_power_ready`, and `pd_voltage_measured: null`. `motor_power_ready` means a non-5 V request and a completed two-second settling timer, not verified voltage or PG. Motion is rejected until that timer completes. Reset restores the 5 V disabled state.
+- `winding_current_a`: two signed nominal INA240 samples, or null on clipping/read failure. `current_a` is their vector magnitude in amps. These readings are uncalibrated, instantaneous and not supply current; motion telemetry includes refreshed samples.
+
+The new board supports `full:1`, `half:2`, `quarter:4`, `eighth:8`, `sixteenth:16`. Hardware MODE pins fix 1/16 microsteps; the selected increment groups STEP pulses. Existing counts, speed and commanded full-step coordinates retain their protocol meaning.

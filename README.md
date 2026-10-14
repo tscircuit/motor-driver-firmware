@@ -6,7 +6,7 @@ MicroPython motor-control firmware with a Web Serial dashboard. Motion and safet
 
 ## Supported hardware
 
-The included hardware profile is **RP2040 / DRV8847**, for the [tscircuit RP2040 motor controller](https://tscircuit.com/imrishabh18/rp2040-motor-controller#files), with a TMP102 temperature sensor and a StepperOnline 17HE15-1504S motor (200 full steps/revolution).
+Hardware profiles include **RP2040 / DRV8847** and **RP2040 / DRV8825 / RGB**, for the [tscircuit RP2040 motor controller](https://tscircuit.com/imrishabh18/rp2040-motor-controller#files), with a TMP102 temperature sensor and a StepperOnline 17HE15-1504S motor (200 full steps/revolution).
 
 The original firmware was exercised on this board with MicroPython 1.29.0. The modular refactor is covered by host-side regression tests, including a simulated second driver/platform; it has not yet been flashed and validated on hardware. Other driver chips and MCUs need an adapter/profile and hardware validation. The host simulator is a test double, not a supported physical driver.
 
@@ -153,3 +153,20 @@ Pulse deadlines preserve their planned phase through small scheduling delays, an
 ## Single-motor keyboard jogging
 
 Open `/single-motor.html` and connect one controller. Hold Up/Right to jog forward or Down/Left to jog backward. Release to decelerate; Space/Escape stops immediately. This page uses the gantry controller’s fixed 400 ms ramps, full/half stepping, speed setting, fault and focus-loss stops, and three SAVE/GOTO slots. Its saved positions use separate browser storage from the gantry. Run `node tests/test_single_motor.cjs` for the single-page regression test.
+
+
+## Latest DRV8825 / RGB board (v1.0.42)
+
+Stage with `python3 scripts/build_firmware.py --board rp2040_drv8825 --output build/drv8825` and upload the entire staged tree. Keep the original profile for DRV8847 boards: the GPIO meanings differ and the profiles are not interchangeable.
+
+The latest board uses STEP 18, DIR 19, nRESET 20, nENBL 21, USB-PD gated nSLEEP 22 and nFAULT 23. Temperature is read on I2C1 GPIO26/27; GPIO24 is unused because TMP102 ALERT is disconnected. Software temperature, communication, watchdog and driver-fault protection remain enabled.
+
+Hardware fixes the driver at 1/16 microstepping, or 3200 STEP pulses/revolution for a 200-step motor. The dashboard and keyboard pages offer full, half, quarter, eighth and sixteenth increments; larger increments group pulses without changing MODE pins. GOTO uses the finest supported increment for saved coordinates. Positions remain commanded coordinates, not measured shaft position; sleep/wake alignment and missed steps can affect physical return accuracy.
+
+All three pages expose motor voltage requests (5/9/12/15/20 V) and LED colors. Startup requests 5 V and disables the motor. Select a supported supply profile before motion; 12 V is a useful initial request. Each transition disables the driver, passes CFG1 through the 5 V code, updates the other selectors, then waits two seconds before allowing wake. GPIO4/5/6 invert CH224K CFG1/2/3. The delay is a conservative software interval, not a measured PD acceptance/rail-discharge time. The board does not expose PG or motor voltage to the MCU. Requested voltage and `motor_power_ready` do not prove the actual rail voltage; check TP_PD / TP_VMOTOR with a meter. Reset returns to 5 V; requests are not saved.
+
+RGB uses transistor sinks on GPIO25/2/3 (red/green/blue), high = on. Automatic status is green idle, blue moving and blinking red on alarm or fault. Manual colors include off, red, green, blue, yellow, cyan, magenta and white; alarms/faults override manual selection. Manual selection is not saved across reset.
+
+GPIO28/29 read the two INA240 winding amplifiers. Telemetry uses the nominal 3.3 V ADC reference, 1.65 V midpoint and 1 V/A transfer. `winding_current_a` contains signed instantaneous A/B samples and `current_a` is their vector magnitude, not supply current or calibrated RMS. Clipped ADC readings are unavailable. Validate/calibrate against a current probe; current readings do not establish stall detection.
+
+On 2026-10-13, board `e66568714f117e21` ran MicroPython 1.29.0 and this profile: healthy TMP102 telemetry around 26.6 C, all RGB commands acknowledged with matching telemetry, a 12 V request, two 32-microstep forward/reverse moves with exact commanded counts and no reported faults, and a completed test tone. Actual rail voltage, shaft movement, LED channel order and audible output require external observation. Host tests also cover driver pulses, power gating, selector sequencing, sensor handling and alarm priority.
