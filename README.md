@@ -1,5 +1,7 @@
 # Motor driver firmware
 
+**The DRV8825/RGB controller now has native C firmware with PIO step generation.** Build and flash its UF2 using the [native installation guide](firmware-c/README.md). The existing public dashboard and gantry controls use the same protocol. The sections below describe the retained MicroPython firmware for older boards and as a migration reference.
+
 MicroPython motor-control firmware with a Web Serial dashboard. Motion and safety logic are separated from driver chips, board wiring, and MCU services so additional hardware can reuse the controller and protocol.
 
 [Public dashboard](https://motorcontrol.tscircuit.com) · [Porting guide](docs/architecture.md) · [Serial protocol](docs/protocol.md)

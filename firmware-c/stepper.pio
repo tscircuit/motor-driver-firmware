@@ -1,0 +1,30 @@
+; One segment is [period_ticks - 34, pulse_count - 1]. Clock: 10 MHz.
+; STEP high: 30 cycles = 3 us. At 200 kHz STEP low >= 2 us.
+; Blocking pulls hold STEP low on starvation or exact finite completion.
+.program stepper
+.wrap_target
+    pull block
+    mov isr, osr
+    pull block
+    mov y, osr
+pulse:
+    mov x, isr
+pause:
+    jmp x-- pause
+    set pins, 1 [29]
+    set pins, 0
+    jmp y-- pulse
+.wrap
+
+; Independent counter observes the STEP pin, including partially executed
+; segments. DMA continually copies the latest count into one RAM word.
+.program pulse_counter
+    mov x, ~null
+.wrap_target
+    wait 0 pin 0
+    wait 1 pin 0
+    jmp x-- counted
+counted:
+    mov isr, x
+    push noblock
+.wrap
