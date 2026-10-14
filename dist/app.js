@@ -8,7 +8,7 @@ const caps=()=>({...defaults,...(last?.capabilities||{})});
 let nameDirty=false,renaming=false,restartNotice=null;
 let points=[],pending=new Map(),dirty=false,writeChain=Promise.resolve();
 const message=t=>{$('message').textContent=t;};
-function controls(){const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500;$('beep').disabled=!live||renaming;const songReady=live&&caps().song_supported&&!last?.motor_enabled&&!last?.alarm_active&&!last?.restarting&&!renaming&&!songBusy;$('playSong').disabled=!songReady||!loadedSong;$('demoSong').disabled=!songReady;$('stopSong').disabled=!live||!caps().song_supported;$('deviceName').disabled=!live||!last?.usb_name_supported||!!last?.motor_enabled||renaming;$('rename').disabled=$('deviceName').disabled;$('threshold').disabled=!live;$('apply').disabled=!live||!!last?.motor_enabled||renaming;for(const id of ['mode','resolution','direction','steps','speed','start'])$(id).disabled=!live||last?.protocol!==3||!!last?.motor_enabled||renaming||!!last?.restarting;$('acceleration').disabled=!live||!caps().acceleration_supported||!!last?.motor_enabled||renaming||!!last?.restarting;$('stop').disabled=!port;$('connect').disabled=connecting||renaming||closing;$('connect').textContent=port?'Disconnect':'Connect board ↗';}
+function controls(){hardwareControls();const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500;$('beep').disabled=!live||renaming;const songReady=live&&caps().song_supported&&!last?.motor_enabled&&!last?.alarm_active&&!last?.restarting&&!renaming&&!songBusy;$('playSong').disabled=!songReady||!loadedSong;$('demoSong').disabled=!songReady;$('stopSong').disabled=!live||!caps().song_supported;$('deviceName').disabled=!live||!last?.usb_name_supported||!!last?.motor_enabled||renaming;$('rename').disabled=$('deviceName').disabled;$('threshold').disabled=!live;$('apply').disabled=!live||!!last?.motor_enabled||renaming;for(const id of ['mode','resolution','direction','steps','speed','start'])$(id).disabled=!live||last?.protocol!==3||!!last?.motor_enabled||renaming||!!last?.restarting;$('acceleration').disabled=!live||!caps().acceleration_supported||!!last?.motor_enabled||renaming||!!last?.restarting;$('stop').disabled=!port;$('connect').disabled=connecting||renaming||closing;$('connect').textContent=port?'Disconnect':'Connect board ↗';hardwareControls();}
 function send(cmd,fields={}){
  if(!port||!port.writable)return Promise.reject(Error('Connect the board first.'));
  const id=nextId++;
@@ -23,6 +23,7 @@ function receive(line){
  let data;try{data=JSON.parse(line);}catch{return;}
  if(data.type==='ack'){const p=pending.get(data.id);if(p){clearTimeout(p.timer);pending.delete(data.id);data.ok?p.resolve(data):p.reject(Error(data.error||'Command rejected'));}return;}
  if(data.type!=='telemetry'||![1,2,3].includes(data.protocol))return;
+ if(data.compact)data={...last,...data};
  if(!Number.isFinite(data.threshold_c))return;
  const t=data.temperature_c;if(t!==null&&!Number.isFinite(t))return;
  const now=Date.now();if(lastSeen&&now-lastSeen>2500)points.push({t:now-1,v:null});
@@ -96,7 +97,8 @@ function updateCapabilities(){
  $('timingStatus').textContent=c.acceleration_supported?`Ramped motion · profile ${Number(last?.profile_speed_sps||0).toFixed(1)} steps/sec · ${last?.late_steps||0} late steps · worst delay ${((last?.max_step_lateness_us||0)/1000).toFixed(2)} ms. Timing counters do not measure motor skips.`:'Install updated firmware for acceleration and higher speeds (older firmware retains its speed limit).';
  const measured=last?.current_available&&Number.isFinite(last.current_a);
  $('current').textContent=measured?`${last.current_a.toFixed(2)} A`:'Unavailable';
- $('currentHint').textContent=measured?'Measured current':(c.current_note||'No current measurement connection to the MCU.');
+ $('currentHint').textContent=Array.isArray(last?.winding_current_a)?`Winding A ${last.winding_current_a[0].toFixed(2)} A · B ${last.winding_current_a[1].toFixed(2)} A · uncalibrated instantaneous samples`:measured?'Measured current':(c.current_note||'No current measurement connection to the MCU.');
+ updateHardware();
  if(key!==capabilityKey){
   const selected=$('resolution').value;
   $('resolution').replaceChildren(...Object.entries(c.resolutions).map(([name,factor])=>{const option=document.createElement('option');option.value=name;option.textContent=`${name} · ${(360/(c.full_steps_per_revolution*factor)).toFixed(2)}°`;return option;}));
@@ -153,3 +155,25 @@ $('demoSong').addEventListener('click',async()=>{
  catch(error){message(error.message);}
 });
 $('stopSong').addEventListener('click',async()=>{try{await send('stop_song');message('Song stopped. Temperature alarms remain enabled.');}catch(error){message(error.message);}});
+
+function hardwareControls(){
+ const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500&&!renaming&&!last?.restarting;
+ $('ledColor').disabled=$('applyLed').disabled=!live||!caps().led_colors?.length;
+ $('pdVoltage').disabled=$('applyPd').disabled=!live||!!last?.motor_enabled||!caps().pd_voltages?.length;
+ if(caps().pd_voltages?.length&&!last?.motor_power_ready)$('start').disabled=true;
+}
+let hardwareKey='';
+function updateHardware(){
+ const c=caps(),key=JSON.stringify([c.led_colors,c.pd_voltages]);
+ $('hardwarePanel').hidden=!c.led_colors?.length&&!c.pd_voltages?.length;
+ if(key!==hardwareKey){
+  const options=(values,label)=>values.map(value=>{const o=document.createElement('option');o.value=value;o.textContent=label(value);return o;});
+  $('ledColor').replaceChildren(...options(c.led_colors?.length?['auto',...c.led_colors]:[],v=>v==='auto'?'Automatic status':v));
+  $('pdVoltage').replaceChildren(...options(c.pd_voltages||[],v=>`${v} V${v===5?' · motor disabled':''}`));
+  $('pdVoltage').value=last?.pd_voltage_requested||5;
+  hardwareKey=key;
+ }
+ $('hardwareStatus').textContent=`LED: ${last?.led_color||'—'} · Requested motor supply: ${last?.pd_voltage_requested??'—'} V${last?.motor_power_ready?' · settled':' · driver unavailable / settling'}`;
+}
+$('applyLed').addEventListener('click',async()=>{try{await send('set_led',{color:$('ledColor').value});await send('status');message('LED color applied. Alarms take priority.');}catch(e){message(e.message);}});
+$('applyPd').addEventListener('click',async()=>{try{await send('set_pd_voltage',{voltage:Number($('pdVoltage').value)});await send('status');message('Motor voltage requested. Wait two seconds for settling.');}catch(e){message(e.message);}});

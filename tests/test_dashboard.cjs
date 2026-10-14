@@ -44,3 +44,16 @@ context.packet=JSON.stringify({...telemetry,capabilities:{max_speed_sps:null,acc
 context.packet=JSON.stringify({type:'telemetry',compact:true,protocol:3,temperature_c:32,motor_enabled:true});run('receive(packet)');
 assert.equal(element('speed').max,'');assert.equal(element('deviceIdentity').textContent,'<Left motor> · test123');
 console.log('PASS compact motion telemetry preserves board capabilities and identity');
+
+const modern={...telemetry,motor_power_ready:false,pd_voltage_requested:5,led_color:'green',winding_current_a:[0.2,-0.3],capabilities:{resolutions:{full:1,half:2,quarter:4,eighth:8,sixteenth:16},led_colors:['off','red','green','blue'],pd_voltages:[5,9,12,15,20]}};
+context.packet=JSON.stringify(modern);run('receive(packet)');
+assert.equal(element('hardwarePanel').hidden,false);
+assert.equal(element('start').disabled,true);
+assert.equal(element('applyPd').disabled,false);
+assert.match(element('currentHint').textContent,/Winding A 0.20 A · B -0.30 A/);
+context.packet=JSON.stringify({...modern,motor_power_ready:true});run('receive(packet)');
+assert.equal(element('start').disabled,false);
+context.packet=JSON.stringify({...modern,motor_enabled:true,motor_power_ready:true});run('receive(packet)');
+assert.equal(element('applyPd').disabled,true);assert.equal(element('applyLed').disabled,false);
+run('lastSeen=0;controls()');assert.equal(element('applyPd').disabled,true);assert.equal(element('applyLed').disabled,true);
+console.log('PASS DRV8825 RGB/current controls, power settling, motion and stale gating');

@@ -76,6 +76,9 @@ class Platform:
     def i2c(self, bus, sda, scl, frequency):
         return machine.I2C(bus, sda=machine.Pin(sda), scl=machine.Pin(scl), freq=frequency)
 
+    def adc(self, pin):
+        return machine.ADC(machine.Pin(pin))
+
     def tone(self, pin, frequency):
         return Tone(pin, frequency)
 

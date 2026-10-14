@@ -49,7 +49,8 @@ class Controller:
         self.alarm = False
         self.sounding = False
         self.led_on = False
-        self.resolution = next(iter(self.motor.resolutions))
+        self.led_selection = 'auto'
+        self.resolution = 'full' if 'full' in self.motor.resolutions else next(iter(self.motor.resolutions))
         self.mode = 'stopped'
         self.direction = 1
         self.speed = max(board.min_speed_sps, min(40, board.max_speed_sps or 40))
@@ -91,7 +92,9 @@ class Controller:
 
     def capabilities(self):
         b = self.board
-        return {'song_supported': callable(getattr(b.buzzer, 'play', None)),
+        return {'led_colors': getattr(b, 'led_colors', ()),
+                'pd_voltages': getattr(b, 'pd_voltages', ()),
+                'song_supported': callable(getattr(b.buzzer, 'play', None)),
                 'song_format': 'u16le-hz-u16le-ms', 'song_max_bytes': MAX_BYTES,
                 'resolutions': self.motor.resolutions,
                 'full_steps_per_revolution': b.full_steps_per_revolution,
@@ -108,19 +111,24 @@ class Controller:
 
     def status(self, compact=False):
         if compact:
-            return {'type':'telemetry', 'compact':True, 'protocol':3, 'temperature_c':self.temperature,
+            result = {'type':'telemetry', 'compact':True, 'protocol':3, 'temperature_c':self.temperature,
                     'motor_enabled':self.motor.enabled, 'motion_mode':self.mode,
                     'sensor_error':self.sensor_error, 'alarm_active':self.alarm,
                     'thermal_alert':self.board.thermal_alert(), 'driver_fault_asserted':self.motor.fault_asserted(),
                     'profile_speed_sps':self.motion.rate if self.motion and self.mode not in ('stopped','prepared') else 0,
                     'position_full_steps':self.position_full_steps, 'stop_reason':self.stop_reason}
+            if getattr(self.board, 'pd_voltages', ()):
+                current = self.board.current_a()
+                result.update({'current_a': current, 'current_available': current is not None})
+                result.update(self.board.extra_status())
+            return result
 
         current = self.board.current_a()
         if current is not None and (isinstance(current, bool) or not isinstance(current, (int, float))
                                     or not math.isfinite(current) or current < 0):
             current = None
         usb = self.platform.usb
-        return {'type': 'telemetry', 'protocol': 3, 'uptime_ms': self.clock.ticks_ms(),
+        result = {'type': 'telemetry', 'protocol': 3, 'uptime_ms': self.clock.ticks_ms(),
                 'temperature_c': self.temperature, 'device_name': self.device_name,
                 'usb_name': usb.usb_name, 'usb_name_supported': usb.usb_name is not None,
                 'usb_name_error': usb.usb_name_error, 'device_id': self.platform.device_id(),
@@ -147,7 +155,9 @@ class Controller:
                 'current_a': current, 'current_available': current is not None,
                 'board': self.board.name, 'board_id': self.board.id,
                 'mcu': self.board.mcu, 'driver': self.motor.name,
-                'capabilities': self.capabilities()}
+                'capabilities': self.capabilities(), 'led_selection': self.led_selection}
+        result.update(getattr(self.board, 'extra_status', lambda: {})())
+        return result
 
     def start(self, command):
         b = self.board
@@ -260,6 +270,19 @@ class Controller:
                     raise ValueError('Deceleration requires continuous motion')
             elif operation == 'status':
                 self.emit(self.status())
+            elif operation == 'set_led':
+                colors = getattr(self.board, 'led_colors', ())
+                color = command.get('color')
+                if not colors or color not in ('auto',) + tuple(colors):
+                    raise ValueError('Unsupported LED color')
+                self.led_selection = color
+            elif operation == 'set_pd_voltage':
+                if self.mode != 'stopped' or self.reset_at is not None:
+                    raise ValueError('Stop motor before changing motor voltage')
+                setter = getattr(self.board, 'set_pd_voltage', None)
+                if setter is None:
+                    raise ValueError('Motor voltage selection unavailable')
+                setter(command.get('voltage'))
             elif operation == 'set_threshold':
                 if self.mode != 'stopped':
                     raise ValueError('Stop motor before saving settings')
@@ -356,7 +379,18 @@ class Controller:
         else:
             self.board.buzzer.set(self.sounding)
         self.led_on = bool(led_value(now, self.alarm, self.mode != 'stopped'))
-        self.board.led.value(int(self.led_on))
+        if getattr(self.board, 'led_colors', ()):
+            fault = self.sensor_error or self.motor.fault_asserted() or self.board.thermal_alert()
+            if fault or self.alarm:
+                color = 'red' if led_value(now, True, False) else 'off'
+            elif self.led_selection != 'auto':
+                color = self.led_selection
+            else:
+                color = 'blue' if self.mode != 'stopped' else 'green'
+            self.board.led.set_color(color)
+            self.led_on = color != 'off'
+        else:
+            self.board.led.value(int(self.led_on))
         if self.reset_at is not None and self.clock.ticks_diff(now, self.reset_at) >= 0:
             self.stop('Restarting to apply USB name')
             self.board.buzzer.set(False)
