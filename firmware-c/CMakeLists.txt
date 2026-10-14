@@ -8,10 +8,10 @@ set(CMAKE_C_STANDARD 11)
 pico_sdk_init()
 set(MOTOR_INITIAL_NAME "Motor bench" CACHE STRING "Name used when native settings are empty")
 set(MOTOR_INITIAL_THRESHOLD 65 CACHE STRING "Alarm threshold used when native settings are empty")
-add_executable(motorcontrol main.c motor.c profile.c settings.c usb_descriptors.c vendor/cJSON.c)
+add_executable(motorcontrol main.c motor.c profile.c settings.c current_capture.c current_stats.c usb_descriptors.c vendor/cJSON.c)
 # Fingerprint the source and build configuration so live boards can be checked
 # against the actual image, without relying only on a fixed version label.
-set(BUILD_INPUTS CMakeLists.txt main.c motor.c motor.h profile.c profile.h settings.c
+set(BUILD_INPUTS current_capture.c current_capture.h current_stats.c CMakeLists.txt main.c motor.c motor.h profile.c profile.h settings.c
     settings.h usb_descriptors.c tusb_config.h stepper.pio memory_guard.ld
     vendor/cJSON.c vendor/cJSON.h)
 set(BUILD_FINGERPRINT "${PICO_SDK_VERSION_STRING}:${MOTOR_INITIAL_NAME}:${MOTOR_INITIAL_THRESHOLD}")
