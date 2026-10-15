@@ -16,4 +16,5 @@ h.receive({type:'current_samples',first_sample_us:90000000,window_us:1000,sample
 h.reset();h.receive({type:'telemetry',winding_current_a:[-.5,.6]},10000);assert.equal(h.points[0].w[0].sum,-.5);
 h.receive({type:'telemetry',winding_current_a:null},10250);assert.deepEqual(h.points.at(-1).w,[null,null]);
 for(const file of ['index.html','single-motor.html','gantry.html']){const s=fs.readFileSync('dist/'+file,'utf8');assert.ok(s.includes('data-current-axis'));assert.ok(s.indexOf('src="current-chart.js"')<s.indexOf('src="'+(file==='index.html'?'app':'gantry')+'.js"'));}
+h.reset();h.receive({type:'current_samples',first_sample_us:0,window_us:1000,sample_rate_hz:100000,current_volts_per_amp:0.2,bins:Array(20).fill(bin)},10000);assert.ok(Math.abs(h.points[0].w[0].max-5*(3000*3.3/4095-1.65))<1e-10);
 console.log('PASS current charts: 100k capture, peak preservation, weighted averages, gaps, bounded history, legacy fallback, all pages');

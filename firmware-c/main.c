@@ -18,7 +18,11 @@
 #include "pico/unique_id.h"
 #include "tusb.h"
 #endif
+#include "board.h"
 #include "current_capture.h"
+#ifdef MOTOR_BOARD_DRV8452
+#include "nema23.h"
+#endif
 #include "motor.h"
 #include "settings.h"
 #include "vendor/cJSON.h"
@@ -32,7 +36,10 @@ static const uint8_t color_bits[] = {0, 1, 2, 4, 3, 6, 5, 7};
 static const char *resolutions[] = {"full", "half", "quarter", "eighth", "sixteenth"};
 static const char *modes[] = {"stopped", "prepared", "steps", "continuous", "braking", "test"};
 static char device_id[17], session[33], stop_reason[96] = "Boot: motor disabled";
-static uint64_t boot_us, heartbeat_us, last_sample, last_emit, test_until, restart_at, power_at;
+static uint64_t boot_us, heartbeat_us, last_sample, last_emit, test_until, restart_at;
+#ifndef MOTOR_BOARD_DRV8452
+static uint64_t power_at;
+#endif
 static bool heartbeat_seen, temperature_valid, alarm, sensor_initialized;
 static double temperature;
 static int pd_voltage = 5, led_selection = -1, led_bits, buzzer_frequency;
@@ -48,7 +55,13 @@ static void stop(const char *reason) {
     song_length = 0;
     snprintf(stop_reason, sizeof(stop_reason), "%s", reason);
 }
-static bool power_ready(void) { return pd_voltage >= 9 && time_us_64() >= power_at; }
+static bool power_ready(void) {
+#ifdef MOTOR_BOARD_DRV8452
+    return nema23_ready();
+#else
+    return pd_voltage >= 9 && time_us_64() >= power_at;
+#endif
+}
 static bool driver_fault(void) { return !gpio_get(23); }
 static bool read_reg(uint8_t reg, uint16_t *value) {
     uint8_t bytes[2];
@@ -65,7 +78,8 @@ static bool write_reg(uint8_t reg, uint16_t value) {
 static bool sensor_verify(void) {
     uint16_t config, low, high;
     return read_reg(1, &config) && (config & SENSOR_MASK) == (SENSOR_CONFIG & SENSOR_MASK) &&
-           read_reg(2, &low) && low == (60u * 256) && read_reg(3, &high) && high == (75u * 256);
+           read_reg(2, &low) && low == (SENSOR_LOW_C * 256) && read_reg(3, &high) &&
+           high == (SHUTDOWN_C * 256);
 }
 static void sample(void) {
     uint16_t raw;
@@ -83,17 +97,17 @@ static void sample(void) {
 static void buzzer(int hz) {
     if (hz == buzzer_frequency)
         return;
-    uint slice = pwm_gpio_to_slice_num(16);
+    uint slice = pwm_gpio_to_slice_num(BUZZER_PIN);
     pwm_set_enabled(slice, false);
-    gpio_put(16, 0);
+    gpio_put(BUZZER_PIN, 0);
     if (hz) {
         /* 1 MHz PWM tick; duty cycle 50%. */
         pwm_set_clkdiv(slice, 125.0f);
         pwm_set_wrap(slice, 1000000 / hz - 1);
-        pwm_set_gpio_level(16, (1000000 / hz) / 2);
+        pwm_set_gpio_level(BUZZER_PIN, (1000000 / hz) / 2);
         pwm_set_enabled(slice, true);
     } else {
-        pwm_set_gpio_level(16, 0);
+        pwm_set_gpio_level(BUZZER_PIN, 0);
     }
     buzzer_frequency = hz;
 }
@@ -103,9 +117,9 @@ static void indicators(uint64_t now, motor_status_t s) {
                : led_selection >= 0 ? color_bits[led_selection]
                : s.mode == STOPPED  ? 2
                                     : 4;
-    gpio_put(25, led_bits & 1);
-    gpio_put(2, led_bits & 2);
-    gpio_put(3, led_bits & 4);
+    gpio_put(LED_RED_PIN, led_bits & 1);
+    gpio_put(LED_GREEN_PIN, led_bits & 2);
+    gpio_put(LED_BLUE_PIN, led_bits & 4);
     if (alarm) {
         song_length = 0;
         buzzer((now / 1000) % 1000 < 180 ? 2731 : 0);
@@ -164,7 +178,7 @@ static void currents(cJSON *o) {
     bool valid = current_capture_snapshot(raw);
     cJSON *array = cJSON_CreateArray();
     for (int i = 0; i < 2; ++i) {
-        readings[i] = raw[i] * 3.3 / 4095 - 1.65;
+        readings[i] = (raw[i] * 3.3 / 4095 - 1.65) / CURRENT_VOLTS_PER_AMP;
         cJSON_AddItemToArray(array, cJSON_CreateNumber(readings[i]));
     }
     if (valid) {
@@ -188,6 +202,7 @@ static void stream_current(void) {
     add_number(o, "first_sample_us", frame.first_sample_us);
     add_number(o, "window_us", 1000);
     add_number(o, "sample_rate_hz", CURRENT_SAMPLE_HZ);
+    add_number(o, "current_volts_per_amp", CURRENT_VOLTS_PER_AMP);
     add_number(o, "samples_captured", frame.captured);
     add_number(o, "dropped_samples", frame.dropped);
     for (unsigned i = 0; i < frame.count; ++i) {
@@ -211,8 +226,27 @@ static cJSON *capabilities(void) {
         add_number(r, resolutions[i], 1 << i);
     cJSON_AddItemToObject(c, "resolutions", r);
     cJSON_AddItemToObject(c, "led_colors", cJSON_CreateStringArray(colors, 8));
+#ifdef MOTOR_BOARD_DRV8452
+    int volts[] = {5, 9, 12, 15, 20, 28};
+    add_bool(c, "power_arm_required", true);
+    add_bool(c, "pd_power_good_override_supported", true);
+    add_bool(c, "current_limit_supported", true);
+    add_number(c, "current_limit_min_a", 0.1);
+    add_number(c, "current_limit_max_a", NEMA23_FULL_SCALE_A);
+    add_number(c, "pd_settle_ms", 14000);
+    add_number(c, "current_foldback_c", 60);
+    add_string(
+        c, "power_note",
+        "Request voltage, wait for the verified contract, then arm motor power below 55 C. Changes "
+        "discharge for 12 seconds. The raw PD input defaults to 28 V; it is isolated at boot. "
+        "PD power-good is ignored by default; PD communication and driver/eFuse checks remain "
+        "active.");
+#else
     int volts[] = {5, 9, 12, 15, 20};
-    cJSON_AddItemToObject(c, "pd_voltages", cJSON_CreateIntArray(volts, 5));
+#endif
+    cJSON_AddItemToObject(c, "pd_voltages",
+                          cJSON_CreateIntArray(volts, sizeof(volts) / sizeof(volts[0])));
+    add_number(c, "current_volts_per_amp", CURRENT_VOLTS_PER_AMP);
     add_number(c, "full_steps_per_revolution", 200);
     add_number(c, "min_speed_sps", MIN_SPEED_SPS);
     null(c, "max_speed_sps");
@@ -226,10 +260,10 @@ static cJSON *capabilities(void) {
     add_number(c, "min_acceleration_sps2", 10);
     add_number(c, "max_acceleration_sps2", 1000);
     add_number(c, "default_acceleration_sps2", 100);
-    add_number(c, "start_below_c", 60);
-    add_number(c, "shutdown_c", 75);
+    add_number(c, "start_below_c", START_BELOW_C);
+    add_number(c, "shutdown_c", SHUTDOWN_C);
     add_number(c, "threshold_min_c", 10);
-    add_number(c, "threshold_max_c", 74);
+    add_number(c, "threshold_max_c", SHUTDOWN_C - 1);
     add_number(c, "heartbeat_timeout_ms", 1500);
     add_number(c, "buzzer_hz", 2731);
     add_bool(c, "song_supported", true);
@@ -264,7 +298,13 @@ static void status(bool compact) {
     else
         add_string(o, "sensor_error", "TMP102 unavailable or protection configuration changed");
     add_bool(o, "alarm_active", alarm);
-    add_bool(o, "thermal_alert", false);
+    add_bool(o, "thermal_alert",
+#ifdef MOTOR_BOARD_DRV8452
+             nema23_status().phase == POWER_LATCHED || (power_ready() && !gpio_get(24))
+#else
+             false
+#endif
+    );
     add_bool(o, "driver_fault_asserted", driver_fault());
     add_number(o, "pulse_queue_underruns", s.queue_underruns);
     add_string(o, "step_resolution", resolution_name(s.factor));
@@ -279,6 +319,23 @@ static void status(bool compact) {
     add_number(o, "pd_voltage_requested", pd_voltage);
     null(o, "pd_voltage_measured");
     add_bool(o, "motor_power_ready", power_ready());
+#ifdef MOTOR_BOARD_DRV8452
+    nema23_status_t board = nema23_status();
+    add_string(o, "power_state", nema23_phase_name());
+    add_string(o, "power_error", board.fault ? board.fault : "");
+    add_bool(o, "pd_request_sent", board.request_sent);
+    add_bool(o, "pd_power_good", !gpio_get(1));
+    add_bool(o, "pd_power_good_override", board.ignore_pd_power_good);
+    add_bool(o, "protected_rail_interlock", gpio_get(24));
+    add_bool(o, "power_fault_asserted", !gpio_get(2));
+    add_bool(o, "pd_contract_valid", board.contract_valid);
+    add_number(o, "pd_contract_current_a", board.current_units * 0.05);
+    add_number(o, "pd_protocol_status", board.pd_status);
+    add_bool(o, "power_armed", board.phase == POWER_READY);
+    add_number(o, "current_limit_peak_a", board.current_peak_a);
+    add_bool(o, "current_foldback_active", board.folded_back);
+    add_bool(o, "driver_spi_verified", board.spi_valid && gpio_get(WAKE_PIN));
+#endif
     currents(o);
     add_string(o, "led_color", color_name());
     if (!compact) {
@@ -313,10 +370,10 @@ static void status(bool compact) {
         add_number(o, "hardware_pulses_executed", s.executed_pulses);
         add_number(o, "pulse_test_pulses", diagnostic_pulses);
         add_number(o, "pulse_test_elapsed_us", diagnostic_elapsed);
-        add_string(o, "board", "RP2040 / DRV8825 / RGB");
-        add_string(o, "board_id", "rp2040_drv8825");
+        add_string(o, "board", BOARD_NAME);
+        add_string(o, "board_id", BOARD_ID);
         add_string(o, "mcu", "RP2040");
-        add_string(o, "driver", "DRV8825");
+        add_string(o, "driver", DRIVER_NAME);
         cJSON_AddItemToObject(o, "capabilities", capabilities());
     }
     emit(o);
@@ -391,10 +448,17 @@ static const char *motion_command(cJSON *c, bool jog) {
     if (!power_ready())
         return "Select motor power and wait two seconds";
     sample();
-    if (!temperature_valid || temperature >= 60)
-        return "Temperature must be valid and below 60 C";
+    if (!temperature_valid || temperature >= START_BELOW_C)
+        return "Temperature must be valid and below the board start limit";
     if (driver_fault())
         return "Driver fault";
+#ifdef MOTOR_BOARD_DRV8452
+    if (s.mode == STOPPED) {
+        const char *driver_error = nema23_prepare_motion();
+        if (driver_error)
+            return driver_error;
+    }
+#endif
     bool ok = (jog && s.mode != STOPPED)
                   ? motor_retarget(factor, (int)direction, speed, acceleration, fixed)
                   : motor_start(factor, (int)direction, speed, acceleration, (uint32_t)count, fixed,
@@ -471,8 +535,8 @@ static void command(const char *line) {
         error = motion_command(c, matches(cmd, "jog"));
     else if (matches(cmd, "run_move")) {
         sample();
-        if (!recent_heartbeat() || !temperature_valid || temperature >= 60 || driver_fault() ||
-            !power_ready()) {
+        if (!recent_heartbeat() || !temperature_valid || temperature >= START_BELOW_C ||
+            driver_fault() || !power_ready()) {
             stop("Prepared move failed safety check");
             error = "Prepared move failed safety check";
         } else if (!motor_run_prepared())
@@ -485,7 +549,56 @@ static void command(const char *line) {
             previous_mode = BRAKING;
         } else if (s.mode != STOPPED && s.mode != BRAKING)
             error = "Deceleration requires continuous motion";
+    } else if (matches(cmd, "arm_power") || matches(cmd, "set_current_limit")) {
+#ifdef MOTOR_BOARD_DRV8452
+        if (s.mode != STOPPED || restart_at)
+            error = "Stop motor first";
+        else if (matches(cmd, "arm_power")) {
+            sample();
+            error = nema23_arm(temperature_valid, temperature);
+        } else {
+            double peak;
+            if (!number(c, "peak_a", &peak))
+                error = "Provide peak_a in amps";
+            else
+                error = nema23_set_current(peak);
+        }
+#else
+        error = "Board does not support this command";
+#endif
+    } else if (matches(cmd, "set_pd_power_good_override")) {
+#ifdef MOTOR_BOARD_DRV8452
+        cJSON *enabled = cJSON_GetObjectItemCaseSensitive(c, "enabled");
+        if (s.mode != STOPPED || restart_at)
+            error = "Stop motor first";
+        else if (!cJSON_IsBool(enabled))
+            error = "enabled must be a boolean";
+        else
+            nema23_set_pg_override(cJSON_IsTrue(enabled));
+#else
+        error = "Board does not support this command";
+#endif
+    } else if (matches(cmd, "disarm_power")) {
+#ifdef MOTOR_BOARD_DRV8452
+        stop("Motor power disarmed");
+        nema23_disarm();
+#else
+        error = "Board does not support this command";
+#endif
     } else if (matches(cmd, "set_pd_voltage")) {
+#ifdef MOTOR_BOARD_DRV8452
+        double voltage;
+        if (s.mode != STOPPED || restart_at)
+            error = "Stop motor before changing voltage";
+        else if (!number(c, "voltage", &voltage) || floor(voltage) != voltage || voltage < 5 ||
+                 voltage > 28)
+            error = "Invalid voltage";
+        else {
+            error = nema23_request_voltage((int)voltage);
+            if (!error)
+                pd_voltage = (int)voltage;
+        }
+#else
         double voltage;
         if (s.mode != STOPPED || restart_at)
             error = "Stop motor before changing voltage";
@@ -506,6 +619,8 @@ static void command(const char *line) {
             pd_voltage = (int)voltage;
             power_at = time_us_64() + 2000000;
         }
+
+#endif
     } else if (matches(cmd, "set_led")) {
         const char *color = string(c, "color");
         int next = -2;
@@ -525,8 +640,9 @@ static void command(const char *line) {
             settings_t next = settings;
             if (matches(cmd, "set_threshold")) {
                 double threshold;
-                if (!number(c, "threshold_c", &threshold) || threshold < 10 || threshold > 74)
-                    error = "Threshold must be 10-74 C";
+                if (!number(c, "threshold_c", &threshold) || threshold < 10 ||
+                    threshold > SHUTDOWN_C - 1)
+                    error = "Threshold must be below the board shutdown temperature";
                 else
                     next.threshold = threshold;
             } else {
@@ -581,10 +697,24 @@ static void command(const char *line) {
     cJSON_Delete(c);
 }
 static void protect(uint64_t now, motor_status_t s) {
+#ifdef MOTOR_BOARD_DRV8452
+    nema23_poll(now, temperature_valid, temperature);
+    if (nema23_status().phase == POWER_LATCHED) {
+        stop(nema23_status().fault);
+        return;
+    }
+    if (!tud_cdc_connected() && nema23_status().phase != POWER_OFF) {
+        nema23_disarm();
+        stop("USB disconnected");
+        return;
+    }
+    if (s.mode != STOPPED && heartbeat_seen && now - heartbeat_us > HEARTBEAT_US)
+        nema23_disarm();
+#endif
     if (s.mode != STOPPED) {
         if (!temperature_valid)
             stop("Temperature sensor error");
-        else if (temperature >= 75)
+        else if (temperature >= SHUTDOWN_C)
             stop("Thermal shutdown");
         else if (driver_fault())
             stop("Driver fault");
@@ -595,14 +725,28 @@ static void protect(uint64_t now, motor_status_t s) {
     }
 }
 static void safe_gpio(void) {
+#ifdef MOTOR_BOARD_DRV8452
+    const int pins[] = {0, 6, 8, 10, 11, 25, 3, 17, 18, 19, 20, 21, 22};
+    const int inputs[] = {1, 2, 7, 23, 24};
+#else
     const int pins[] = {22, 21, 18, 19, 20, 4, 5, 6, 25, 2, 3, 16};
+    const int inputs[] = {23};
+#endif
     for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]); ++i) {
         gpio_init(pins[i]);
-        gpio_put(pins[i], pins[i] == 21);
+        gpio_put(pins[i],
+#ifdef MOTOR_BOARD_DRV8452
+                 pins[i] == 17
+#else
+                 pins[i] == 21
+#endif
+        );
         gpio_set_dir(pins[i], GPIO_OUT);
     }
-    gpio_init(23);
-    gpio_set_dir(23, GPIO_IN); /* PCB supplies nFAULT pull-up. */
+    for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+        gpio_init(inputs[i]);
+        gpio_set_dir(inputs[i], GPIO_IN);
+    }
 }
 int main(void) {
     safe_gpio();
@@ -617,6 +761,9 @@ int main(void) {
         if (device_id[i] >= 'A' && device_id[i] <= 'F')
             device_id[i] += 'a' - 'A';
     snprintf(session, sizeof(session), "%s-%08lx", device_id, (unsigned long)get_rand_32());
+#ifdef MOTOR_BOARD_DRV8452
+    nema23_init();
+#endif
     motor_init();
     if (!settings_has_saved())
         settings_save(&settings);
@@ -626,11 +773,11 @@ int main(void) {
     gpio_set_function(27, GPIO_FUNC_I2C);
     gpio_pull_up(26);
     gpio_pull_up(27);
-    sensor_initialized = write_reg(1, SENSOR_CONFIG) && write_reg(2, 60 * 256) &&
-                         write_reg(3, 75 * 256) && sensor_verify();
+    sensor_initialized = write_reg(1, SENSOR_CONFIG) && write_reg(2, SENSOR_LOW_C * 256) &&
+                         write_reg(3, SHUTDOWN_C * 256) && sensor_verify();
     sleep_ms(300);
     sample();
-    gpio_set_function(16, GPIO_FUNC_PWM);
+    gpio_set_function(BUZZER_PIN, GPIO_FUNC_PWM);
     tusb_init();
     watchdog_enable(2000, true);
     char line[513];

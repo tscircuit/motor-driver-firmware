@@ -1,4 +1,5 @@
 #include "motor.h"
+#include "board.h"
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
 #include "hardware/irq.h"
@@ -9,7 +10,6 @@
 #include "stepper.pio.h"
 #include <math.h>
 
-#define STEP_PIN 18
 static PIO pio = pio0;
 static uint step_sm, counter_sm, step_offset, counter_offset;
 static int counter_dma;
@@ -55,8 +55,14 @@ static void pause_locked(void) {
     state.pulse_rate = 0;
 }
 static void halt_locked(void) {
-    gpio_put(21, 1); /* Release immediately, even before synchronizing PIO. */
-    gpio_put(22, 0);
+    gpio_put(ARM_PIN,
+#ifdef MOTOR_BOARD_DRV8452
+             0
+#else
+             1
+#endif
+    ); /* Release immediately, before synchronizing PIO. */
+    gpio_put(WAKE_PIN, 0);
     pause_locked();
     state.enabled = false;
 }
@@ -89,11 +95,19 @@ static void begin_locked(double initial, uint32_t target, bool fixed, bool defer
                 : state.enabled ? 3
                                 : 3000) +
                (!test && !fixed && !jogging ? 100000 : 0);
-    gpio_put(19, state.direction > 0);
+    gpio_put(DIR_PIN, state.direction > 0);
     if (!test) {
+#ifndef MOTOR_BOARD_DRV8452
         gpio_put(20, 1);
-        gpio_put(22, 1);
-        gpio_put(21, 0);
+#endif
+        gpio_put(WAKE_PIN, 1);
+        gpio_put(ARM_PIN,
+#ifdef MOTOR_BOARD_DRV8452
+                 1
+#else
+                 0
+#endif
+        );
         state.enabled = true;
     }
     /* Enabled by core 1 after the driver's wake/setup interval. */

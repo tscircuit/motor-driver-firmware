@@ -6,15 +6,25 @@ include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
 project(motorcontrol C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 pico_sdk_init()
+set(MOTOR_BOARD "drv8825" CACHE STRING "Target PCB: drv8825 or nema23_drv8452")
+set_property(CACHE MOTOR_BOARD PROPERTY STRINGS drv8825 nema23_drv8452)
+if(NOT MOTOR_BOARD STREQUAL "drv8825" AND NOT MOTOR_BOARD STREQUAL "nema23_drv8452")
+    message(FATAL_ERROR "Unsupported MOTOR_BOARD")
+endif()
 set(MOTOR_INITIAL_NAME "Motor bench" CACHE STRING "Name used when native settings are empty")
 set(MOTOR_INITIAL_THRESHOLD 65 CACHE STRING "Alarm threshold used when native settings are empty")
 add_executable(motorcontrol main.c motor.c profile.c settings.c current_capture.c current_stats.c usb_descriptors.c vendor/cJSON.c)
+if(MOTOR_BOARD STREQUAL "nema23_drv8452")
+    target_sources(motorcontrol PRIVATE nema23.c)
+    target_compile_definitions(motorcontrol PRIVATE MOTOR_BOARD_DRV8452=1)
+    target_link_libraries(motorcontrol hardware_spi)
+endif()
 # Fingerprint the source and build configuration so live boards can be checked
 # against the actual image, without relying only on a fixed version label.
-set(BUILD_INPUTS current_capture.c current_capture.h current_stats.c CMakeLists.txt main.c motor.c motor.h profile.c profile.h settings.c
+set(BUILD_INPUTS board.h nema23.c nema23.h current_capture.c current_capture.h current_stats.c CMakeLists.txt main.c motor.c motor.h profile.c profile.h settings.c
     settings.h usb_descriptors.c tusb_config.h stepper.pio memory_guard.ld
     vendor/cJSON.c vendor/cJSON.h)
-set(BUILD_FINGERPRINT "${PICO_SDK_VERSION_STRING}:${MOTOR_INITIAL_NAME}:${MOTOR_INITIAL_THRESHOLD}")
+set(BUILD_FINGERPRINT "${MOTOR_BOARD}:${PICO_SDK_VERSION_STRING}:${MOTOR_INITIAL_NAME}:${MOTOR_INITIAL_THRESHOLD}")
 foreach(INPUT IN LISTS BUILD_INPUTS)
     file(SHA256 "${CMAKE_CURRENT_LIST_DIR}/${INPUT}" INPUT_HASH)
     string(APPEND BUILD_FINGERPRINT ":${INPUT_HASH}")

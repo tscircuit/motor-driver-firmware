@@ -9,3 +9,5 @@
 .songControls{margin-bottom:28px}.songControls input{width:100%;margin-bottom:10px}.songControls .nameRow{flex-wrap:wrap;margin-top:12px}.songControls button{white-space:normal;padding:10px}.songControls a{color:#75efd0}.songControls p{margin-top:8px}
 
 .hotControls{border-top:1px solid #34495a;margin-top:20px;padding-top:20px}.hotControls select{min-width:0;flex:1}.hotControls>button{margin-top:12px;width:100%}
+
+.nema23Controls{border-top:1px solid #334155;margin-top:20px;padding-top:12px}.nema23Controls h3{font-size:16px}.nema23Controls p{font-size:13px;line-height:1.6}.nema23Controls button{margin:6px 6px 6px 0}

@@ -19,3 +19,7 @@ build/native-tests/test-settings
 "$compiler" -std=c11 -Wall -Wextra -Werror -fsanitize="$sanitize" -Ifirmware-c \
   firmware-c/current_stats.c tests/native/test_current.c -o build/native-tests/test-current
 build/native-tests/test-current
+
+"$compiler" -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -DCJSON_NESTING_LIMIT=8 -DMOTOR_BOARD_DRV8452=1 -DNEMA23_HOST_TEST=1 -fsanitize="$sanitize" \
+  -Ifirmware-c -Itests/native tests/native/test_nema23.c firmware-c/nema23.c firmware-c/profile.c firmware-c/vendor/cJSON.c -lm -o build/native-tests/test-nema23
+build/native-tests/test-nema23

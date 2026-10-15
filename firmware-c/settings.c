@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "board.h"
 #include <math.h>
 #include <string.h>
 #ifdef MOTOR_HOST_TEST
@@ -48,7 +49,8 @@ bool settings_name_valid(const char *name) {
 static bool valid(const record_t *r) {
     return r->magic == SETTINGS_MAGIC && memchr(r->value.name, 0, sizeof(r->value.name)) &&
            settings_name_valid(r->value.name) && isfinite(r->value.threshold) &&
-           r->value.threshold >= 10 && r->value.threshold <= 74 && r->checksum == checksum(r);
+           r->value.threshold >= 10 && r->value.threshold <= SHUTDOWN_C - 1 &&
+           r->checksum == checksum(r);
 }
 void settings_load(void) {
     settings = (settings_t){.name = MOTOR_INITIAL_NAME, .threshold = MOTOR_INITIAL_THRESHOLD};
@@ -68,7 +70,7 @@ static void write_flash(void *unused) {
 }
 bool settings_save(const settings_t *next) {
     if (!settings_name_valid(next->name) || !isfinite(next->threshold) || next->threshold < 10 ||
-        next->threshold > 74)
+        next->threshold > SHUTDOWN_C - 1)
         return false;
     record_t r = {.magic = SETTINGS_MAGIC, .sequence = sequence + 1, .value = *next};
     r.checksum = checksum(&r);

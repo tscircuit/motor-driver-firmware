@@ -22,6 +22,7 @@ function send(cmd,fields={}){
 function receive(line){
  let data;try{data=JSON.parse(line);}catch{return;}
  if(typeof CurrentCharts!=='undefined')CurrentCharts.receive('motor',data);
+ if(typeof BoardControls!=='undefined')BoardControls.receive('motor',data,(cmd,fields)=>send(cmd,fields));
  if(data.type==='current_samples')return;
  if(data.type==='ack'){const p=pending.get(data.id);if(p){clearTimeout(p.timer);pending.delete(data.id);data.ok?p.resolve(data):p.reject(Error(data.error||'Command rejected'));}return;}
  if(data.type!=='telemetry'||![1,2,3].includes(data.protocol))return;
@@ -175,7 +176,7 @@ function updateHardware(){
   $('pdVoltage').value=last?.pd_voltage_requested||5;
   hardwareKey=key;
  }
- $('hardwareStatus').textContent=`LED: ${last?.led_color||'—'} · Requested motor supply: ${last?.pd_voltage_requested??'—'} V${last?.motor_power_ready?' · settled':' · driver unavailable / settling'}`;
+ $('hardwareStatus').textContent=`LED: ${last?.led_color||'—'} · ${c.power_arm_required&&!last?.pd_request_sent?'No software voltage request sent':'Requested motor supply: '+(last?.pd_voltage_requested??'—')+' V'}${last?.motor_power_ready?' · settled':' · driver unavailable / settling'}`;
 }
 $('applyLed').addEventListener('click',async()=>{try{await send('set_led',{color:$('ledColor').value});await send('status');message('LED color applied. Alarms take priority.');}catch(e){message(e.message);}});
-$('applyPd').addEventListener('click',async()=>{try{await send('set_pd_voltage',{voltage:Number($('pdVoltage').value)});await send('status');message('Motor voltage requested. Wait two seconds for settling.');}catch(e){message(e.message);}});
+$('applyPd').addEventListener('click',async()=>{try{await send('set_pd_voltage',{voltage:Number($('pdVoltage').value)});await send('status');message(caps().power_arm_required?'Voltage request queued. Wait for the verified contract, then arm motor power.':'Motor voltage requested. Wait two seconds for settling.');}catch(e){message(e.message);}});
