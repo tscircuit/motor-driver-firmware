@@ -21,6 +21,8 @@ function send(cmd,fields={}){
 }
 function receive(line){
  let data;try{data=JSON.parse(line);}catch{return;}
+ if(typeof CurrentCharts!=='undefined')CurrentCharts.receive('motor',data);
+ if(data.type==='current_samples')return;
  if(data.type==='ack'){const p=pending.get(data.id);if(p){clearTimeout(p.timer);pending.delete(data.id);data.ok?p.resolve(data):p.reject(Error(data.error||'Command rejected'));}return;}
  if(data.type!=='telemetry'||![1,2,3].includes(data.protocol))return;
  if(data.compact)data={...last,...data};
@@ -61,10 +63,10 @@ function draw(){
  $('empty').style.display=values.length?'none':'flex';
 }
 async function readLoop(){let buffer='';const decoder=new TextDecoder();try{while(port&&reader){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});let i;while((i=buffer.indexOf('\n'))>=0){receive(buffer.slice(0,i).trim());buffer=buffer.slice(i+1);}if(buffer.length>8192)buffer='';}}catch(e){if(!closing)message(restartNotice||('USB connection lost: '+e.message));}finally{reader?.releaseLock();reader=null;}}
-async function disconnect(){if(closing)return;closing=true;try{if(port&&[2,3].includes(last?.protocol)){try{await send('stop');}catch{}}if(reader)await reader.cancel();if(reading)await reading;await writeChain.catch(()=>{});if(port)await port.close();}catch{}finally{port=null;reading=null;lastSeen=0;closing=false;for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('Disconnected'));}pending.clear();$('state').textContent='Disconnected';$('connectionHint').textContent='Graph retained. Reconnect to resume live readings.';$('tempHint').textContent='Last reading · disconnected';$('motionState').textContent='Disconnected · automatic stop';$('motorStatus').textContent='Disconnected';controls();}}
+async function disconnect(){if(closing)return;closing=true;try{if(port&&[2,3].includes(last?.protocol)){try{await send('stop');}catch{}}if(reader)await reader.cancel();if(reading)await reading;await writeChain.catch(()=>{});if(port)await port.close();}catch{}finally{port=null;reading=null;lastSeen=0;closing=false;for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('Disconnected'));}pending.clear();if(typeof CurrentCharts!=='undefined')CurrentCharts.disconnect('motor');$('state').textContent='Disconnected';$('connectionHint').textContent='Graph retained. Reconnect to resume live readings.';$('tempHint').textContent='Last reading · disconnected';$('motionState').textContent='Disconnected · automatic stop';$('motorStatus').textContent='Disconnected';controls();}}
 async function connect(){if(port)return disconnect();connecting=true;controls();try{
  const selected=await navigator.serial.requestPort();
- await selected.open({baudRate:115200});port=selected;lastSeen=0;last=null;points=[];dirty=false;nameDirty=false;renaming=false;restartNotice=null;
+ await selected.open({baudRate:115200});port=selected;if(typeof CurrentCharts!=='undefined')CurrentCharts.reset('motor');lastSeen=0;last=null;points=[];dirty=false;nameDirty=false;renaming=false;restartNotice=null;
  await port.setSignals({dataTerminalReady:true,requestToSend:false});reader=port.readable.getReader();reading=readLoop();
  reading.then(()=>{if(!closing&&port)void disconnect();});
  $('state').textContent='Waiting for board';message('Connected. Waiting for telemetry…');

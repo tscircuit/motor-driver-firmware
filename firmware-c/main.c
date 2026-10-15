@@ -18,6 +18,7 @@
 #include "pico/unique_id.h"
 #include "tusb.h"
 #endif
+#include "current_capture.h"
 #include "motor.h"
 #include "settings.h"
 #include "vendor/cJSON.h"
@@ -142,7 +143,10 @@ static bool emit(cJSON *o) {
     if (text) {
         size_t n = strlen(text);
         cJSON *kind = cJSON_GetObjectItemCaseSensitive(o, "type");
-        size_t reserve = cJSON_IsString(kind) && strcmp(kind->valuestring, "ack") == 0 ? 0 : 768;
+        size_t reserve = cJSON_IsString(kind) && strcmp(kind->valuestring, "ack") == 0 ? 0
+                         : cJSON_IsString(kind) && strcmp(kind->valuestring, "current_samples") == 0
+                             ? 3500
+                             : 768;
         if (tud_cdc_connected() && n + 1 + reserve <= tud_cdc_write_available()) {
             tud_cdc_write(text, n);
             tud_cdc_write_char('\n');
@@ -156,14 +160,11 @@ static bool emit(cJSON *o) {
 }
 static void currents(cJSON *o) {
     double readings[2];
-    bool valid = true;
+    uint16_t raw[2] = {0};
+    bool valid = current_capture_snapshot(raw);
     cJSON *array = cJSON_CreateArray();
     for (int i = 0; i < 2; ++i) {
-        adc_select_input(2 + i);
-        uint16_t raw = adc_read();
-        if (raw < 16 || raw > 4079)
-            valid = false;
-        readings[i] = raw * 3.3 / 4095 - 1.65;
+        readings[i] = raw[i] * 3.3 / 4095 - 1.65;
         cJSON_AddItemToArray(array, cJSON_CreateNumber(readings[i]));
     }
     if (valid) {
@@ -175,6 +176,34 @@ static void currents(cJSON *o) {
         null(o, "current_a");
     }
     add_bool(o, "current_available", valid);
+}
+static void stream_current(void) {
+    static current_frame_t frame;
+    current_capture_read(&frame, tud_cdc_connected());
+    if (!frame.count)
+        return;
+    cJSON *o = cJSON_CreateObject(), *bins = cJSON_CreateArray();
+    add_string(o, "type", "current_samples");
+    add_number(o, "protocol", 3);
+    add_number(o, "first_sample_us", frame.first_sample_us);
+    add_number(o, "window_us", 1000);
+    add_number(o, "sample_rate_hz", CURRENT_SAMPLE_HZ);
+    add_number(o, "samples_captured", frame.captured);
+    add_number(o, "dropped_samples", frame.dropped);
+    for (unsigned i = 0; i < frame.count; ++i) {
+        int values[8];
+        for (unsigned w = 0; w < 2; ++w) {
+            current_stats_t s = frame.bins[i].winding[w];
+            values[4 * w] = s.min;
+            values[4 * w + 1] = s.max;
+            values[4 * w + 2] = s.sum;
+            values[4 * w + 3] = s.count;
+        }
+        cJSON_AddItemToArray(bins, cJSON_CreateIntArray(values, 8));
+    }
+    cJSON_AddItemToObject(o, "bins", bins);
+    if (!emit(o))
+        current_capture_drop(frame.count);
 }
 static cJSON *capabilities(void) {
     cJSON *c = cJSON_CreateObject(), *r = cJSON_CreateObject();
@@ -207,6 +236,8 @@ static cJSON *capabilities(void) {
     add_string(c, "song_format", "u16le-hz-u16le-ms");
     add_number(c, "song_max_bytes", 192);
     add_bool(c, "hardware_pulse_timing", true);
+    add_number(c, "current_sample_hz", CURRENT_SAMPLE_HZ);
+    add_bool(c, "current_stream_supported", true);
     add_bool(c, "pulse_test_supported", true);
     add_string(c, "step_note",
                "Fixed 1/16 hardware microsteps. PIO generates evenly spaced physical pulses at up "
@@ -589,9 +620,7 @@ int main(void) {
     motor_init();
     if (!settings_has_saved())
         settings_save(&settings);
-    adc_init();
-    adc_gpio_init(28);
-    adc_gpio_init(29);
+    current_capture_init();
     i2c_init(i2c1, 100000);
     gpio_set_function(26, GPIO_FUNC_I2C);
     gpio_set_function(27, GPIO_FUNC_I2C);
@@ -607,7 +636,7 @@ int main(void) {
     char line[513];
     size_t length = 0;
     bool overflow = false;
-    uint64_t connection_lost_at = 0;
+    uint64_t connection_lost_at = 0, last_current_emit = 0;
     while (true) {
         tud_task();
         uint64_t now = time_us_64();
@@ -670,6 +699,10 @@ int main(void) {
         if (now - last_emit >= 250000) {
             status(s.mode != STOPPED && s.mode != PREPARED);
             last_emit = now;
+        }
+        if (now - last_current_emit >= 20000) {
+            stream_current();
+            last_current_emit = now;
         }
         watchdog_update();
         sleep_us(50);

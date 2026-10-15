@@ -262,3 +262,8 @@ int main(void) {
     puts("Native protocol: heartbeat/power/temperature/fault gates, prepared moves, malformed "
          "commands, bounds, alarm priority and driver-disabled pulse test passed");
 }
+
+void current_capture_init(void) {}
+bool current_capture_snapshot(uint16_t raw[2]) {raw[0]=2048;raw[1]=2048;return true;}
+void current_capture_read(current_frame_t *f, bool connected) {memset(f,0,sizeof(*f));}
+void current_capture_drop(unsigned bins) {}

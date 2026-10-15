@@ -179,3 +179,22 @@ On 2026-10-13, board `e66568714f117e21` ran MicroPython 1.29.0 and this profile.
 The single-motor jogging page lists only the connected board's supported step sizes, with their angular increments: full, half, quarter, 1/8 and 1/16 for the DRV8825 profile. Target speed and RPM estimates use the selected increment. Saved-position GOTO still uses the finest supported increment to return to exact commanded coordinates, converting its speed from the selected jog unit.
 
 Board controls include USB-PD requests, manual/automatic RGB colors, winding-current samples and separate requested/measured voltage labels. On PCB release 1.0.42, R_PD_VBUS connects the motor USB input to CH224K VBUS, not an RP2040 ADC. GPIO26/27 (ADC0/1) carry TMP102 I2C, and GPIO28/29 (ADC2/3) carry winding current. The page therefore displays measured PD voltage as unavailable on this board. A future board's actual `pd_voltage_measured` telemetry is displayed when supplied; requested voltage is never substituted for measurement.
+
+### High-rate winding current graphs
+
+The bench, single-motor and gantry pages share a rolling ten-second current graph.
+Native firmware captures ADC channels 2 and 3 at 100,000 samples/sec per winding
+(200,000 total) with round-robin ADC and a DMA ring, independently of PIO motion.
+Every 20 ms it sends `current_samples` frames containing 1 ms min/max/sum/count
+bins. The browser combines these into 10 ms display buckets, retaining extrema
+and weighted averages. Current is signed and uncalibrated; it is winding current,
+not supply current. Legacy firmware falls back to its regular telemetry rate.
+
+Frames include device timestamps, cumulative captured samples and skipped samples.
+USB backpressure drops whole frames to preserve command acknowledgements and
+protection telemetry; the graph reports skips and leaves time gaps. Sampling
+continues while disconnected, with a fresh stream cursor on reconnect. ADC rail
+clipping or conversion errors are excluded, never displayed as zero current.
+
+Run `node tests/test_current_chart.cjs` and `scripts/test_native.sh` for graph
+aggregation and native capture-statistics regression checks.

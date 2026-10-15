@@ -4,3 +4,5 @@ scripts/
 docs/
 build/
 __pycache__/
+firmware-c/
+work/

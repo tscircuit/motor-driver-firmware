@@ -16,3 +16,6 @@ sanitize="${NATIVE_SANITIZERS:-undefined}"
 build/native-tests/test-profile
 build/native-tests/test-protocol
 build/native-tests/test-settings
+"$compiler" -std=c11 -Wall -Wextra -Werror -fsanitize="$sanitize" -Ifirmware-c \
+  firmware-c/current_stats.c tests/native/test_current.c -o build/native-tests/test-current
+build/native-tests/test-current
