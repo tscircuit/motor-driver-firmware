@@ -76,6 +76,8 @@ static void setup(void) {
     memset(spi_regs, 0, sizeof(spi_regs));
     safe_gpio();
     nema23_init();
+    assert(nema23_status().ignore_pd_power_good);
+    nema23_set_pg_override(false); /* Exercise optional strict mode below. */
     sensor_initialized = true;
     fake_registers[1] = SENSOR_CONFIG;
     fake_registers[2] = 55 * 256;
@@ -94,7 +96,7 @@ static void request20(void) {
     nema23_poll(fake_us, true, 25);
     assert(pd_written == 4);
     nema23_poll(fake_us, true, 25);
-    assert(!fake_pins[8] && !fake_pins[0]);
+    assert((!fake_pins[8] || nema23_status().ignore_pd_power_good) && !fake_pins[0]);
     fake_us += 2000000;
     fake_pins[1] = 0;
     nema23_poll(fake_us, true, 25);
@@ -178,6 +180,22 @@ int main(void) {
         cJSON_GetArrayItem(cJSON_GetObjectItem(o, "winding_current_a"), 0)->valuedouble;
     assert(fabs(measured - (2048 * 3.3 / 4095 - 1.65) / .2) < 1e-10);
     cJSON_Delete(o);
-    puts("NEMA23: pins, 12s discharge, verified PD/current/PG, explicit arm, SPI mode/readback, "
+    setup();
+    fake_pins[1] = 1;
+    check("{\"cmd\":\"set_pd_power_good_override\",\"enabled\":1}", false);
+    check("{\"cmd\":\"set_pd_power_good_override\",\"enabled\":true}", true);
+    request20();
+    fake_pins[1] = 1;
+    arm();
+    assert(nema23_ready() && nema23_status().ignore_pd_power_good);
+    fake_us += 100001;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_ready());
+    fake_pins[24] = 0;
+    nema23_poll(fake_us, true, 25);
+    assert(!nema23_ready() && !fake_pins[0]);
+    setup();
+    assert(!nema23_status().ignore_pd_power_good);
+    puts("NEMA23: pins, 12s discharge, verified PD/current, optional PG, explicit arm, SPI mode/readback, "
          "foldback, thermal/power/USB latches, bounds and 0.2 V/A scaling passed");
 }

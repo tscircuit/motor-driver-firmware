@@ -229,6 +229,7 @@ static cJSON *capabilities(void) {
 #ifdef MOTOR_BOARD_DRV8452
     int volts[] = {5, 9, 12, 15, 20, 28};
     add_bool(c, "power_arm_required", true);
+    add_bool(c, "pd_power_good_override_supported", true);
     add_bool(c, "current_limit_supported", true);
     add_number(c, "current_limit_min_a", 0.1);
     add_number(c, "current_limit_max_a", NEMA23_FULL_SCALE_A);
@@ -238,7 +239,8 @@ static cJSON *capabilities(void) {
         c, "power_note",
         "Request voltage, wait for the verified contract, then arm motor power below 55 C. Changes "
         "discharge for 12 seconds. The raw PD input defaults to 28 V; it is isolated at boot. "
-        "Startup PD power-good is required before the buffered bus is enabled.");
+        "PD power-good is ignored by default; PD communication and driver/eFuse checks remain "
+        "active.");
 #else
     int volts[] = {5, 9, 12, 15, 20};
 #endif
@@ -323,6 +325,7 @@ static void status(bool compact) {
     add_string(o, "power_error", board.fault ? board.fault : "");
     add_bool(o, "pd_request_sent", board.request_sent);
     add_bool(o, "pd_power_good", !gpio_get(1));
+    add_bool(o, "pd_power_good_override", board.ignore_pd_power_good);
     add_bool(o, "protected_rail_interlock", gpio_get(24));
     add_bool(o, "power_fault_asserted", !gpio_get(2));
     add_bool(o, "pd_contract_valid", board.contract_valid);
@@ -560,6 +563,18 @@ static void command(const char *line) {
             else
                 error = nema23_set_current(peak);
         }
+#else
+        error = "Board does not support this command";
+#endif
+    } else if (matches(cmd, "set_pd_power_good_override")) {
+#ifdef MOTOR_BOARD_DRV8452
+        cJSON *enabled = cJSON_GetObjectItemCaseSensitive(c, "enabled");
+        if (s.mode != STOPPED || restart_at)
+            error = "Stop motor first";
+        else if (!cJSON_IsBool(enabled))
+            error = "enabled must be a boolean";
+        else
+            nema23_set_pg_override(cJSON_IsTrue(enabled));
 #else
         error = "Board does not support this command";
 #endif

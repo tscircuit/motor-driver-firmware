@@ -12,6 +12,7 @@ static uint64_t deadline, last_contract, last_spi, isolated_at;
 static int last_sent_voltage;
 static bool saw_pg_high, require_pg_edge, clear_on_arm;
 static uint8_t expected_current;
+static bool pg_missing(void) { return !state.ignore_pd_power_good && gpio_get(1); }
 static void isolate(void) {
     gpio_put(22, 0);
     gpio_put(6, 0);
@@ -21,6 +22,7 @@ static void isolate(void) {
 }
 static void latch(const char *reason) {
     isolate();
+    gpio_put(8, 0);
     state.phase = POWER_LATCHED;
     state.fault = reason;
     state.contract_valid = false;
@@ -31,10 +33,10 @@ static bool read_pd_at(uint8_t address, uint8_t reg, uint8_t *value) {
 }
 static bool pd_contract(void) {
     state.contract_valid = false;
-    /* PD_PG_N is the only source-present indication on this PCB. Never enable
-       the buffer while it is high; this deliberately requires the source to
-       complete its resistor-selected startup contract before I2C use. */
-    if (gpio_get(1)) {
+    /* PG can stay deasserted until a software voltage request. Only probe
+       following an explicit request; require PD status/current and actual
+       eFuse/driver checks before allowing motion. Strict PG is optional. */
+    if (pg_missing()) {
         gpio_put(8, 0);
         return false;
     }
@@ -141,7 +143,10 @@ const char *nema23_prepare_motion(void) {
     return NULL;
 }
 void nema23_init(void) {
-    state = (nema23_status_t){.phase = POWER_OFF, .requested_voltage = 5, .current_peak_a = 1.0};
+    state = (nema23_status_t){.phase = POWER_OFF,
+                              .requested_voltage = 5,
+                              .current_peak_a = 1.0,
+                              .ignore_pd_power_good = true};
     last_sent_voltage = 0;
     last_contract = last_spi = 0;
     isolate();
@@ -170,6 +175,10 @@ const char *nema23_request_voltage(int volts) {
     state.fault = NULL;
     deadline = time_us_64() + NEMA23_DISCHARGE_US;
     return NULL;
+}
+void nema23_set_pg_override(bool enabled) {
+    nema23_disarm();
+    state.ignore_pd_power_good = enabled;
 }
 void nema23_disarm(void) {
     isolate();
@@ -210,7 +219,7 @@ const char *nema23_arm(bool valid, double temperature) {
     return NULL;
 }
 bool nema23_ready(void) {
-    return state.phase == POWER_READY && state.contract_valid && !gpio_get(1) && gpio_get(2) &&
+    return state.phase == POWER_READY && state.contract_valid && !pg_missing() && gpio_get(2) &&
            gpio_get(24);
 }
 nema23_status_t nema23_status(void) { return state; }
@@ -225,12 +234,11 @@ const char *nema23_phase_name(void) {
     return names[state.phase];
 }
 void nema23_poll(uint64_t now, bool valid, double temperature) {
-    if (gpio_get(1))
+    if (pg_missing())
         gpio_put(8, 0);
     if (state.phase == POWER_DISCHARGE && now >= deadline) {
-        /* Keep waiting with the buffer disabled until hardware PG proves the
-           motor source is present. No periodic probing of an unpowered IC. */
-        if (gpio_get(1))
+        /* In optional strict mode, wait for hardware PG before probing. */
+        if (pg_missing())
             return;
         state.pd_address = 0;
         if (!pd_contract() && !state.pd_address) {
@@ -259,14 +267,14 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
         last_contract = 0;
     }
     if (state.phase == POWER_NEGOTIATING) {
-        if (gpio_get(1))
+        if (pg_missing())
             saw_pg_high = true;
         if (now >= deadline) {
             latch("PD negotiation was not verified");
             return;
         }
-        if ((!require_pg_edge || saw_pg_high) && !gpio_get(1) && now + 3000000 >= deadline &&
-            now - last_contract >= 100000) {
+        if ((!require_pg_edge || saw_pg_high || state.ignore_pd_power_good) && !pg_missing() &&
+            now + 3000000 >= deadline && now - last_contract >= 100000) {
             last_contract = now;
             if (state.requested_voltage == 5) {
                 uint8_t value;
@@ -285,7 +293,7 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
             latch(valid ? "70 C thermal shutdown" : "Temperature sensor unavailable");
             return;
         }
-        if (gpio_get(1) || !gpio_get(2)) {
+        if (pg_missing() || !gpio_get(2)) {
             latch("PD power loss or eFuse fault");
             return;
         }

@@ -16,7 +16,7 @@ typedef enum {
 typedef struct {
     power_phase_t phase;
     int requested_voltage;
-    bool request_sent, contract_valid, folded_back, spi_valid;
+    bool request_sent, contract_valid, folded_back, spi_valid, ignore_pd_power_good;
     uint8_t pd_address, pd_status, driver_status, current_units;
     double current_peak_a;
     const char *fault;
@@ -28,6 +28,7 @@ const char *nema23_arm(bool sensor_valid, double temperature);
 const char *nema23_set_current(double peak_a);
 const char *nema23_prepare_motion(void);
 void nema23_disarm(void);
+void nema23_set_pg_override(bool enabled);
 bool nema23_ready(void);
 nema23_status_t nema23_status(void);
 const char *nema23_phase_name(void);
