@@ -12,7 +12,7 @@ cmake -S firmware-c -B build/native -G Ninja -DPICO_BOARD=pico
 cmake --build build/native
 ```
 
-Copy `build/native/motorcontrol.uf2` to the board's RPI-RP2 BOOTSEL volume. Both bridge permission signals default to disabled and USB-PD selectors default to 5 V. Reconnect at 115200 baud using the existing dashboard, `/motor.html`, or `/gantry.html`.
+Copy `build/native/motorcontrol.uf2` to the board's RPI-RP2 BOOTSEL volume. Both bridge permission signals default to disabled and USB-PD selectors default to 5 V. Reconnect at 115200 baud using the existing dashboard, `/single-motor.html`, or `/gantry.html`.
 
 For migration, stop and disconnect the dashboard, back up the complete MicroPython filesystem (especially `device.json` and `alarm.json`), and provide initial native defaults:
 
@@ -71,3 +71,7 @@ Both connected DRV8825/RGB controllers were flashed with this native application
 Rate differences include whole PIO tick quantization, four-cycle segment transitions and completion-observation overhead. These are electrical pulse tests; no shaft movement, loaded torque, physical positional accuracy, pulse widths or jitter were independently measured. USB disconnect and heartbeat expiry stopped pulse generation. Renewing the heartbeat did not restart it. Software restarts preserved saved names and alarm thresholds, returned power selection to disabled 5 V, and generated fresh position sessions. Temperatures were valid and no driver/sensor faults were reported.
 
 Full telemetry includes `firmware_build`, a fingerprint of the compiled application sources, SDK version and initial settings. This lets a live device be checked against its build rather than only the fixed version string. Compact telemetry includes the active resolution, target speed and direction, so changing jog units is reflected during motion.
+
+## NEMA23 / DRV8452 target
+
+Build the separate `-DMOTOR_BOARD=nema23_drv8452` image for the published NEMA23 1.3.2 PCB. See [NEMA23.md](NEMA23.md) for exact wiring, current scale, explicit power arming, PD requirements, thermal limits and physical validation status.

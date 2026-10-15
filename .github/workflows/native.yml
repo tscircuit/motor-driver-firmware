@@ -9,6 +9,9 @@ jobs:
         env:
           NATIVE_SANITIZERS: address,undefined
   rp2040-build:
+    strategy:
+      matrix:
+        board: [drv8825, nema23_drv8452]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,9 +25,9 @@ jobs:
           git -C "$RUNNER_TEMP/pico-sdk" submodule update --init --depth 1 lib/tinyusb
       - name: Build native UF2
         run: |
-          cmake -S firmware-c -B build/native -G Ninja -DPICO_BOARD=pico -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk"
+          cmake -S firmware-c -B build/native -G Ninja -DPICO_BOARD=pico -DMOTOR_BOARD=${{ matrix.board }} -DPICO_SDK_PATH="$RUNNER_TEMP/pico-sdk"
           cmake --build build/native
       - uses: actions/upload-artifact@v4
         with:
-          name: motorcontrol-rp2040-drv8825
+          name: motorcontrol-rp2040-${{ matrix.board }}
           path: build/native/motorcontrol.uf2

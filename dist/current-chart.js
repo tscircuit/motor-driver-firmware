@@ -1,7 +1,7 @@
 /* Hardware captures 100 kHz per winding. Display 10 ms buckets without losing peaks. */
 (function(root){
 'use strict';
-const scale=raw=>raw*3.3/4095-1.65;
+const scale=(raw,voltsPerAmp=1)=>(raw*3.3/4095-1.65)/voltsPerAmp;
 class CurrentHistory {
  constructor(){this.reset();}
  reset(){this.points=[];this.anchor=null;this.lastBatch=0;this.rate=0;this.dropped=0;this.seen=0;}
@@ -13,6 +13,7 @@ class CurrentHistory {
    if(this.anchor!==null&&this.anchor+end>now+250){this.anchor=null;this.points=[];}
    if(this.anchor===null)this.anchor=now-end;
    this.lastBatch=now;this.seen=now;this.rate=d.sample_rate_hz;this.dropped=d.dropped_samples||0;
+   const voltsPerAmp=[0.2,1].includes(d.current_volts_per_amp)?d.current_volts_per_amp:1;
    d.bins.slice(0,32).forEach((bin,i)=>{
     if(!Array.isArray(bin)||bin.length!==8)return;
     const t=this.anchor+(d.first_sample_us+i*d.window_us)/1000;
@@ -23,8 +24,8 @@ class CurrentHistory {
      const [min,max,sum,count]=bin.slice(w*4,w*4+4);
      if(!count||count>100||!Number.isFinite(sum)||min<16||max>4079||min>max)continue;
      const s=p.w[w]||(p.w[w]={min:Infinity,max:-Infinity,sum:0,count:0});
-     s.min=Math.min(s.min,scale(min));s.max=Math.max(s.max,scale(max));
-     s.sum+=scale(sum/count)*count;s.count+=count;
+     s.min=Math.min(s.min,scale(min,voltsPerAmp));s.max=Math.max(s.max,scale(max,voltsPerAmp));
+     s.sum+=scale(sum/count,voltsPerAmp)*count;s.count+=count;
     }
    });
   }else if(d.type==='telemetry'&&now-this.lastBatch>1000){
