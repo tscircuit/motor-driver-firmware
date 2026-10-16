@@ -103,6 +103,7 @@ void current_capture_drop(unsigned bins) { dropped += bins * CURRENT_BIN_PAIRS; 
    data-loss reporting rather than silently scoring overwritten samples. */
 void current_capture_analyze(void) {
     uint64_t n=pairs_written();
+    if(!stall_estimator_active()){analysis_cursor=n;return;}
     if(n-analysis_cursor>RING_WORDS/2-512){stall_estimator_gap(n-analysis_cursor);analysis_cursor=n;return;}
     while(analysis_cursor<n){unsigned i=(analysis_cursor*2)&(RING_WORDS-1);stall_estimator_sample(ring[i],ring[i+1],started_us+analysis_cursor*10);analysis_cursor++;}
 }

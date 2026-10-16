@@ -4,7 +4,7 @@
 static float bins[STALL_HISTORY][4];
 static unsigned head, available;
 static uint64_t last_bin, stable_since, last_evaluation;
-static bool calibrated;
+static bool calibrated, job_active;
 static stall_context_t context;
 static stall_result_t result;
 static uint32_t raw_count, sum[2], low[2], high[2];
@@ -12,7 +12,7 @@ static uint64_t square[2], bin_start;
 static const float free_model[7]={0.8541027778f,0.03647127341f,0.09991558061f,0.2047651325f,0.01310903761f,0.005485620016f,0.007647866823f};
 static const float stall_model[7]={0.8248254064f,0.1464264593f,0.116381948f,0.7381990353f,0.3902486648f,1.191072041f,0.1620298415f};
 static const float scale[7]={0.01f,0.01869123035f,0.005f,0.0382675868f,0.2023342691f,0.5694764015f,0.08654615453f};
-static void clear_window(void){head=available=raw_count=0;last_bin=0;bin_start=0;memset(sum,0,sizeof(sum));memset(square,0,sizeof(square));}
+static void clear_window(void){job_active=false;head=available=raw_count=0;last_bin=0;bin_start=0;memset(sum,0,sizeof(sum));memset(square,0,sizeof(square));}
 void stall_estimator_init(bool device){calibrated=device;context=(stall_context_t){0};result=(stall_result_t){.reason="Motor stopped"};stable_since=last_evaluation=0;clear_window();}
 void stall_estimator_context(stall_context_t c,uint64_t now){
  bool changed=c.moving!=context.moving||c.voltage!=context.voltage||c.direction!=context.direction||c.factor!=context.factor||fabsf(c.speed-context.speed)>.001f;
@@ -43,41 +43,60 @@ void stall_estimator_sample(uint16_t a,uint16_t b,uint64_t at){
   raw_count=0;memset(sum,0,sizeof(sum));memset(square,0,sizeof(square));
  }
 }
-bool stall_estimator_features(const float (*s)[4],unsigned n,float speed,float f[7]){
- if(n<100||!isfinite(speed)||speed<=0)return false;
- float ma=0,mb=0;for(unsigned i=0;i<n;i++){ma+=s[i][0];mb+=s[i][1];}ma/=n;mb/=n;
- float sr=0,sr2=0,sp=0,sp2=0,re[3][2]={{0}},im[3][2]={{0}},cs[3]={1,1,1},sn[3]={0},dc[3],ds[3];
- for(unsigned h=0;h<3;h++){float angle=6.28318530718f*speed/4*(2*h+1)/1000;dc[h]=cosf(angle);ds[h]=sinf(angle);}
- for(unsigned i=0;i<n;i++){
-  float a=s[i][0]-ma,b=s[i][1]-mb,r=sqrtf(a*a+b*b),p=s[i][2];sr+=r;sr2+=r*r;sp+=p;sp2+=p*p;
-  for(unsigned h=0;h<3;h++){re[h][0]+=a*cs[h];im[h][0]-=a*sn[h];re[h][1]+=b*cs[h];im[h][1]-=b*sn[h];float c=cs[h]*dc[h]-sn[h]*ds[h];sn[h]=sn[h]*dc[h]+cs[h]*ds[h];cs[h]=c;}
+typedef struct {
+ const float (*samples)[4];unsigned n,pos;float ma,mb,sr,sr2,sp,sp2;
+ float re[3][2],im[3][2],cs[3],sn[3],dc[3],ds[3];
+} feature_job_t;
+static feature_job_t job;
+static void feature_start(feature_job_t *j,const float (*samples)[4],unsigned n,float speed){
+ memset(j,0,sizeof(*j));j->samples=samples;j->n=n;
+ for(unsigned i=0;i<n;i++){j->ma+=samples[i][0];j->mb+=samples[i][1];}j->ma/=n;j->mb/=n;
+ for(unsigned h=0;h<3;h++){float angle=6.28318530718f*speed/4*(2*h+1)/1000;j->cs[h]=1;j->dc[h]=cosf(angle);j->ds[h]=sinf(angle);}
+}
+static void feature_step(feature_job_t *j,unsigned limit){
+ unsigned end=j->pos+limit;if(end>j->n)end=j->n;
+ for(;j->pos<end;j->pos++){
+  const float *s=j->samples[j->pos];float a=s[0]-j->ma,b=s[1]-j->mb,r=sqrtf(a*a+b*b),p=s[2];j->sr+=r;j->sr2+=r*r;j->sp+=p;j->sp2+=p*p;
+  for(unsigned h=0;h<3;h++){j->re[h][0]+=a*j->cs[h];j->im[h][0]-=a*j->sn[h];j->re[h][1]+=b*j->cs[h];j->im[h][1]-=b*j->sn[h];float c=j->cs[h]*j->dc[h]-j->sn[h]*j->ds[h];j->sn[h]=j->sn[h]*j->dc[h]+j->cs[h]*j->ds[h];j->cs[h]=c;}
  }
- float mean=sr/n,rip=sp/n,amp[3];if(mean<.05f||!isfinite(mean))return false;
- for(unsigned h=0;h<3;h++)amp[h]=hypotf(re[h][0],im[h][0])+hypotf(re[h][1],im[h][1]);
- f[0]=mean;f[1]=sqrtf(fmaxf(0,sr2/n-mean*mean))/mean;f[2]=rip/mean;f[3]=sqrtf(fmaxf(0,sp2/n-rip*rip))/(rip+1e-9f);f[4]=amp[1]/(amp[0]+1e-9f);f[5]=amp[2]/(amp[0]+1e-9f);f[6]=fabsf(re[0][0]*re[0][1]+im[0][0]*im[0][1])/(hypotf(re[0][0],im[0][0])*hypotf(re[0][1],im[0][1])+1e-12f);
- for(unsigned i=0;i<7;i++){if(!isfinite(f[i]))return false;}
- return true;
+}
+static bool feature_finish(feature_job_t *j,float f[7]){
+ float mean=j->sr/j->n,rip=j->sp/j->n,amp[3];if(mean<.05f||!isfinite(mean))return false;
+ for(unsigned h=0;h<3;h++)amp[h]=hypotf(j->re[h][0],j->im[h][0])+hypotf(j->re[h][1],j->im[h][1]);
+ f[0]=mean;f[1]=sqrtf(fmaxf(0,j->sr2/j->n-mean*mean))/mean;f[2]=rip/mean;f[3]=sqrtf(fmaxf(0,j->sp2/j->n-rip*rip))/(rip+1e-9f);f[4]=amp[1]/(amp[0]+1e-9f);f[5]=amp[2]/(amp[0]+1e-9f);f[6]=fabsf(j->re[0][0]*j->re[0][1]+j->im[0][0]*j->im[0][1])/(hypotf(j->re[0][0],j->im[0][0])*hypotf(j->re[0][1],j->im[0][1])+1e-12f);
+ for(unsigned i=0;i<7;i++){if(!isfinite(f[i]))return false;}return true;
+}
+bool stall_estimator_features(const float (*samples)[4],unsigned n,float speed,float f[7]){
+ if(n<100||!isfinite(speed)||speed<=0)return false;
+ feature_job_t local;feature_start(&local,samples,n,speed);feature_step(&local,n);return feature_finish(&local,f);
 }
 float stall_estimator_score(const float f[7],bool extrapolate,bool *outlier){
  float a=0,b=0;for(unsigned i=0;i<7;i++){/* Unknown current amplitude is removed when extrapolating. */float v=extrapolate&&i==0?free_model[0]:f[i];a+=(v-free_model[i])*(v-free_model[i])/(scale[i]*scale[i]);b+=(v-stall_model[i])*(v-stall_model[i])/(scale[i]*scale[i]);}
  a=sqrtf(a/7);b=sqrtf(b/7);*outlier=fminf(a,b)>3.5f;return 100*a/(a+b+1e-12f);
 }
 void stall_estimator_evaluate(uint64_t now){
+ if(job_active){
+  feature_step(&job,64);
+  if(job.pos<job.n)return;
+  job_active=false;float f[7];
+  if(!feature_finish(&job,f)){result.valid=false;result.reason="Insufficient winding current";return;}
+  result.score=stall_estimator_score(f,result.extrapolated,&result.outlier);result.extrapolated|=result.outlier;result.coverage=1;result.valid=true;result.reason=result.extrapolated?"Unvalidated extrapolation":"Calibrated operating point";return;
+ }
  if(now-last_evaluation<250000)return;
- last_evaluation=now;result.valid=false;
- if(!calibrated){result.reason="No calibration for this motor";return;}
- if(!context.moving){result.reason="Motor stopped";return;}
- if(!context.healthy){result.reason="Electrical or sensor fault";return;}
+ last_evaluation=now;
+ if(!calibrated){result.valid=false;result.reason="No calibration for this motor";return;}
+ if(!context.moving){result.valid=false;result.reason="Motor stopped";return;}
+ if(!context.healthy){result.valid=false;result.reason="Electrical or sensor fault";return;}
  float speed=context.factor>0?context.speed/context.factor:0;
- if(speed<4||speed>320){result.reason="Insufficient electrical cycles or feature bandwidth";return;}
+ if(speed<4||speed>320){result.valid=false;result.reason="Insufficient electrical cycles or feature bandwidth";return;}
  unsigned n=(unsigned)ceilf(fmaxf(500,16000/speed));result.window_ms=n;
- if(now-stable_since<1000000||available<n||!last_bin||now-last_bin>100000){result.reason="Collecting continuous current samples";return;}
- /* Restore ring order in-place into a separate scratch window to avoid large stack use. */
+ if(now-stable_since<1000000||available<n||!last_bin||now-last_bin>100000){result.valid=false;result.reason="Collecting continuous current samples";return;}
  static float window[4000][4];float variance=0;
  for(unsigned i=0;i<n;i++){unsigned index=(head+STALL_HISTORY-n+i)%STALL_HISTORY;memcpy(window[i],bins[index],sizeof(window[i]));variance+=window[i][3];}
- float f[7];if(!stall_estimator_features(window,n,speed,f)){result.reason="Insufficient winding current";return;}
  result.extrapolated=context.voltage!=9||context.direction!=1||fabsf(speed-60)>.01f||context.temperature<25||context.temperature>40;
- result.score=stall_estimator_score(f,result.extrapolated,&result.outlier);result.extrapolated|=result.outlier;result.ripple_rms=sqrtf(variance/n);result.coverage=1;result.valid=true;result.reason=result.extrapolated?"Unvalidated extrapolation":"Calibrated operating point";
+ result.ripple_rms=sqrtf(variance/n);feature_start(&job,window,n,speed);job_active=true;
 }
 void stall_estimator_compute_time(uint32_t us){if(us>result.compute_max_us)result.compute_max_us=us;}
 stall_result_t stall_estimator_result(void){return result;}
+
+bool stall_estimator_active(void){return context.moving&&context.healthy;}

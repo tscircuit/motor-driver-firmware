@@ -11,6 +11,7 @@ void stall_estimator_context(stall_context_t context, uint64_t now);
 void stall_estimator_sample(uint16_t a, uint16_t b, uint64_t sample_us);
 void stall_estimator_gap(uint64_t count);
 void stall_estimator_evaluate(uint64_t now);
+bool stall_estimator_active(void);
 void stall_estimator_compute_time(uint32_t us);
 stall_result_t stall_estimator_result(void);
 /* Also accepts recorded millisecond bins for deterministic host replay tests. */
