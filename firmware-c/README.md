@@ -75,3 +75,12 @@ Full telemetry includes `firmware_build`, a fingerprint of the compiled applicat
 ## NEMA23 / DRV8452 target
 
 Build the separate `-DMOTOR_BOARD=nema23_drv8452` image for the published NEMA23 1.3.2 PCB. See [NEMA23.md](NEMA23.md) for exact wiring, current scale, explicit power arming, PD requirements, thermal limits and physical validation status.
+
+### NEMA23 current controls
+
+The dashboard exposes two independent, optional current overrides for the DRV8452 board. Both default to off after reboot. Changing either requires a stopped motor and disconnects motor power; it never arms or starts motion.
+
+- **Ignore overcurrent fault shutdown** (`set_overcurrent_shutdown_override`, boolean `enabled`) selects DRV8452 OCP auto-retry using CTRL3.OCP_MODE and ignores only an OCP-only fault report in firmware. The hardware OCP trip remains active. Mixed faults, unreadable SPI, and an unexplained low nFAULT still shut down.
+- **Disable peak winding-current limit** (`set_winding_current_limit_override`, boolean `enabled`) bypasses the configured current cap by programming the board's full-scale setting, approximately 3.965 A peak. The configured current is retained for when this override is turned off. Temperature foldback and thermal shutdown remain active.
+
+Telemetry reports each override separately, `effective_current_peak_a`, the last read `driver_fault_register`, and `driver_overcurrent_reported`. `driver_fault_asserted` continues to report the raw nFAULT pin even when an OCP report is ignored. Older firmware hides unsupported controls.

@@ -78,7 +78,13 @@ static bool power_ready(void) {
     return pd_voltage >= 9 && time_us_64() >= power_at;
 #endif
 }
-static bool driver_fault(void) { return !gpio_get(23); }
+static bool driver_fault(void) {
+#ifdef MOTOR_BOARD_DRV8452
+    return nema23_driver_fault();
+#else
+    return !gpio_get(23);
+#endif
+}
 static bool read_reg(uint8_t reg, uint16_t *value) {
     uint8_t bytes[2];
     if (i2c_write_timeout_us(i2c1, SENSOR_ADDRESS, &reg, 1, true, 2000) != 1 ||
@@ -267,6 +273,8 @@ static cJSON *capabilities(void) {
     add_bool(c, "power_arm_required", true);
     add_bool(c, "pd_power_good_override_supported", true);
     add_bool(c, "fuse_power_fault_override_supported", true);
+    add_bool(c, "overcurrent_shutdown_override_supported", true);
+    add_bool(c, "winding_current_limit_override_supported", true);
     add_bool(c, "pd_negotiation_verification_required", false);
     add_bool(c, "current_limit_supported", true);
     add_number(c, "current_limit_min_a", 0.1);
@@ -361,7 +369,7 @@ static void status(bool compact) {
              false
 #endif
     );
-    add_bool(o, "driver_fault_asserted", driver_fault());
+    add_bool(o, "driver_fault_asserted", !gpio_get(23));
     add_number(o, "pulse_queue_underruns", s.queue_underruns);
     add_string(o, "step_resolution", resolution_name(s.factor));
     add_number(o, "steps_per_revolution", 200 * s.factor);
@@ -393,6 +401,11 @@ static void status(bool compact) {
     add_bool(o, "protected_rail_interlock", gpio_get(24));
     add_bool(o, "power_fault_asserted", !gpio_get(2));
     add_bool(o, "fuse_power_fault_override", board.ignore_fuse_power_fault);
+    add_bool(o, "overcurrent_shutdown_override", board.ignore_overcurrent_shutdown);
+    add_bool(o, "winding_current_limit_override", board.ignore_winding_current_limit);
+    add_number(o, "effective_current_peak_a", nema23_effective_current());
+    add_number(o, "driver_fault_register", board.driver_faults);
+    add_bool(o, "driver_overcurrent_reported", (board.driver_faults & 0x08) != 0);
     add_bool(o, "pd_contract_valid", board.contract_valid);
     add_number(o, "pd_contract_current_a", board.current_units * 0.05);
     add_number(o, "pd_protocol_status", board.pd_status);
@@ -405,7 +418,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.3");
+        add_string(o, "firmware_version", "1.0.4");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -664,13 +677,19 @@ static void command(const char *line) {
         error = "Board does not support this command";
 #endif
     } else if (matches(cmd, "set_pd_power_good_override") ||
-               matches(cmd, "set_fuse_power_fault_override")) {
+               matches(cmd, "set_fuse_power_fault_override") ||
+               matches(cmd, "set_overcurrent_shutdown_override") ||
+               matches(cmd, "set_winding_current_limit_override")) {
 #ifdef MOTOR_BOARD_DRV8452
         cJSON *enabled = cJSON_GetObjectItemCaseSensitive(c, "enabled");
         if (s.mode != STOPPED || restart_at)
             error = "Stop motor first";
         else if (!cJSON_IsBool(enabled))
             error = "enabled must be a boolean";
+        else if (matches(cmd, "set_overcurrent_shutdown_override"))
+            nema23_set_overcurrent_override(cJSON_IsTrue(enabled));
+        else if (matches(cmd, "set_winding_current_limit_override"))
+            nema23_set_winding_limit_override(cJSON_IsTrue(enabled));
         else if (matches(cmd, "set_fuse_power_fault_override"))
             nema23_set_fuse_fault_override(cJSON_IsTrue(enabled));
         else
