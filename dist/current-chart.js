@@ -137,11 +137,14 @@ function mount(card){
  stallCanvas.setAttribute('aria-label',`${heading.textContent}: stall torque count over the last ten seconds`);stallCanvas.setAttribute('role','img');
  stallPanel.append(node('h4',null,'Stall detector · torque count'),node('div','stallLegend','Torque count · dashed line: detection threshold'),stallCanvas,stallSummary);
  const stallUnavailable=node('p','stallUnavailable');stallUnavailable.hidden=true;
+ const experiment=root.CurrentStall?.mount(document);
+ if(experiment)plots.append(experiment.panel);
  plots.append(temperaturePanel,currentPanel,stallPanel);card.append(plots,unavailable,stallUnavailable);
- return {canvas,summary,temperatureCanvas,temperatureSummary,currentPanel,unavailable,history:new CurrentHistory(),temperatureHistory:new TemperatureHistory(),currentSupported:null,stallUnavailable,stallPanel,stallCanvas,stallSummary,stallHistory:new StallHistory()};
+ return {experiment,canvas,summary,temperatureCanvas,temperatureSummary,currentPanel,unavailable,history:new CurrentHistory(),temperatureHistory:new TemperatureHistory(),currentSupported:null,stallUnavailable,stallPanel,stallCanvas,stallSummary,stallHistory:new StallHistory()};
 }
 function receive(chart,d,now=Date.now()){
  if(!chart)return;
+ chart.experiment?.receive(d,now);
  chart.history.receive(d,now);chart.temperatureHistory.receive(d,now);chart.stallHistory.receive(d,now);
  if(d.capabilities){
   chart.stallPanel.hidden=!d.capabilities.stall_detection_supported;
@@ -157,12 +160,12 @@ function receive(chart,d,now=Date.now()){
 }
 const api={CurrentHistory,TemperatureHistory,StallHistory,
  receive:(axis,d)=>receive(charts.get(axis),d),
- reset:axis=>{const c=charts.get(axis);if(c){c.history.reset();c.temperatureHistory.reset();c.stallHistory.reset();c.stallPanel.hidden=true;c.stallUnavailable.hidden=true;c.stallUnavailable.textContent='';c.currentSupported=null;c.currentPanel.hidden=false;c.unavailable.hidden=true;}},
+ reset:axis=>{const c=charts.get(axis);if(c){c.experiment?.reset();c.history.reset();c.temperatureHistory.reset();c.stallHistory.reset();c.stallPanel.hidden=true;c.stallUnavailable.hidden=true;c.stallUnavailable.textContent='';c.currentSupported=null;c.currentPanel.hidden=false;c.unavailable.hidden=true;}},
  disconnect:axis=>{const c=charts.get(axis);if(c){c.history.seen=0;c.temperatureHistory.seen=0;c.stallHistory.seen=0;}}};
 if(typeof module!=='undefined')module.exports=api;
 if(root.document){
  for(const card of root.document.querySelectorAll('[data-current-axis]'))charts.set(card.dataset.currentAxis,mount(card));
- let last=0;function tick(t){if(t-last>=50){last=t;const now=Date.now();for(const chart of charts.values()){drawTemperature(chart,now);if(!chart.currentPanel.hidden)drawCurrent(chart,now);if(!chart.stallPanel.hidden)drawStall(chart,now);}}root.requestAnimationFrame(tick);}root.requestAnimationFrame(tick);
+ let last=0;function tick(t){if(t-last>=50){last=t;const now=Date.now();for(const chart of charts.values()){chart.experiment?.draw(now);drawTemperature(chart,now);if(!chart.currentPanel.hidden)drawCurrent(chart,now);if(!chart.stallPanel.hidden)drawStall(chart,now);}}root.requestAnimationFrame(tick);}root.requestAnimationFrame(tick);
  root.CurrentCharts=api;
 }
 })(typeof window==='undefined'?globalThis:window);

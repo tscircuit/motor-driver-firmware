@@ -4,3 +4,4 @@
 .temperatureLegend{font-size:12px;color:#75efd0}.temperatureLegend span{color:#fb7185;margin-left:16px}
 
 .stallPlot h4,.stallLegend{color:#c4b5fd}.stallLegend{font-size:12px}
+.currentStallPlot{grid-column:1/-1;border-bottom:1px solid #334155;padding-bottom:16px}.currentStallPlot h4{color:#c4b5fd}.currentStallPlot canvas{height:180px}.currentStallPlot [role=status]{color:#c4b5fd;font-weight:600}
