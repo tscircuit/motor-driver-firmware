@@ -271,7 +271,36 @@ static void test_rearm_countdown(void) {
     assert(strcmp(nema23_phase_name(),"Motor rail off")==0);
     assert(!nema23_arm(true,25));
 }
+static void test_current_change_without_rail_cycle(void) {
+    setup();request20();arm();
+    assert(!nema23_set_current(2));
+    assert(fake_pins[0] && !fake_pins[6] && !fake_pins[22]);
+    assert(!nema23_ready() && nema23_rearm_remaining_ms() == 0);
+    arm();
+    assert(spi_regs[0x0e] == nema23_current_code(2));
+    assert(nema23_status().current_peak_a == 2);
+    assert(nema23_set_current(5));
+    assert(nema23_ready() && nema23_status().current_peak_a == 2);
+    /* A current update must not shortcut a pending voltage request. */
+    check("{\"cmd\":\"set_pd_voltage\",\"voltage\":15}", true);
+    assert(nema23_status().phase == POWER_DISCHARGE);
+    assert(!nema23_set_current(1.5));
+    assert(nema23_status().phase == POWER_DISCHARGE);
+    assert(nema23_arm(true,25));
+    fake_us += NEMA23_DISCHARGE_US;
+    nema23_poll(fake_us,true,25);
+    assert(nema23_status().phase == POWER_NEGOTIATING);
+    assert(!nema23_set_current(1));
+    assert(nema23_status().phase == POWER_NEGOTIATING);
+    assert(nema23_arm(true,25));
+    fake_us += 2000000;
+    fake_pins[1] = 0;
+    nema23_poll(fake_us,true,25);
+    arm();
+    assert(spi_regs[0x0e] == nema23_current_code(1));
+}
 int main(void) {
+    test_current_change_without_rail_cycle();
     test_rearm_countdown();
     test_reporting_mode();
     test_current_overrides();

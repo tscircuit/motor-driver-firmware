@@ -308,12 +308,19 @@ void nema23_disarm(void) {
 const char *nema23_set_current(double peak_a) {
     if (!isfinite(peak_a) || peak_a < 0.1 || peak_a > NEMA23_FULL_SCALE_A)
         return "Peak winding current must be 0.1-3.965 A";
-    /* Changes require a new explicit arm and never energize coils. */
-    nema23_disarm();
+    /* Sleep the stopped driver, but retain the unchanged motor supply. The
+       next explicit arm verifies the new DAC setting without cycling the rail.
+       Other phases retain their existing voltage/fault/discharge sequence. */
+    if (state.phase == POWER_READY) {
+        gpio_put(22, 0);
+        gpio_put(6, 0);
+        state.spi_valid = false;
+        state.stall_valid = state.stall_suspected = false;
+        state.warning = state.fault = NULL;
+        state.phase = POWER_CONTRACT;
+    }
     state.current_peak_a = peak_a;
     state.folded_back = false;
-    if (state.request_sent && state.requested_voltage >= 9)
-        state.phase = POWER_CONTRACT;
     return NULL;
 }
 uint32_t nema23_rearm_remaining_ms(void) {
