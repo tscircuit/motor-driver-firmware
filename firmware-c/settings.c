@@ -62,7 +62,7 @@ bool settings_name_valid(const char *name) {
     return true;
 }
 static bool valid(const record_t *r) {
-    return r->magic == SETTINGS_MAGIC && memchr(r->value.name, 0, sizeof(r->value.name)) &&
+    return r->magic == SETTINGS_MAGIC && r->checksum == checksum(r) && memchr(r->value.name, 0, sizeof(r->value.name)) &&
            settings_name_valid(r->value.name) && isfinite(r->value.threshold) &&
            r->value.threshold >= 10 && r->value.threshold <= SHUTDOWN_C - 1 &&
            r->value.stall_stop_ms <= 60000 && r->value.stall_sensitivity <= 100 &&

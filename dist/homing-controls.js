@@ -43,7 +43,7 @@ function mount(axes,jog,report,parent){
  const makeInput=(label,value,min,max)=>{const l=el('label',label+' '),i=el('input');i.type='number';i.value=String(value);i.min=String(min);i.max=String(max);l.append(i);panel.append(l);return i;};
  panel.append(note);
  const speed=makeInput('Homing speed (full steps/sec)',60,25,100),travel=makeInput('Maximum search per end (full steps)',1000,100,100000),backoff=makeInput('Backoff from each stop (full steps)',100,20,1000);
- const run=el('button','Run Stall-based Homing'),status=el('p');status.setAttribute('role','status');panel.append(run,status);parent.append(panel);
+ const run=el('button','Run Stall-based Homing'),status=el('p');status.setAttribute('role','status');panel.append(run,status);const anchor=parent.querySelector('.jogPanel');if(anchor)parent.insertBefore(panel,anchor);else parent.append(panel);
  run.addEventListener('click',()=>{
   const config={speed_full_sps:Number(speed.value),max_travel_full_steps:Number(travel.value),backoff_full_steps:Number(backoff.value)};
   if(Object.values(config).some(v=>!Number.isFinite(v)||v<=0)){report('Enter positive homing settings.');return;}
