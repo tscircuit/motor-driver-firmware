@@ -159,7 +159,7 @@ if(typeof document!=='undefined'){
   $('setLed'+label).onclick=async()=>{try{await axes[label].send('set_led',{color:$('led'+label).value});await axes[label].send('status');}catch(e){report(e.message);}};
   $('setPd'+label).onclick=async()=>{try{await axes[label].send('set_pd_voltage',{voltage:Number($('pd'+label).value)});await axes[label].send('status');report(axes[label].last?.capabilities?.power_arm_required?'Voltage requested. Use Enable motor power to connect the rail.':'Voltage requested. Wait two seconds for settling.');}catch(e){report(e.message);}};
   $('connect'+label).onclick=async()=>{if(axes[label].port){await jog.stop();await axes[label].close();}else await axes[label].connect();};
-  $('beep'+label).onclick=async()=>{try{await axes[label].send('beep');report(label+': playing a 0.6-second tone.');}catch(e){report(e.message);}};
+  $('beep'+label).onclick=async()=>{try{await axes[label].send('beep',{duration_ms:2000});report(label+': requested a 2-second test tone.');}catch(e){report(e.message);}};
   $('rename'+label).onclick=async()=>{await jog.stop();const name=$('name'+label).value.trim();if(!/^[\x20-\x7e]{1,32}$/.test(name)){report('Use 1–32 printable ASCII characters.');return;}try{const ack=await axes[label].send('set_device_name',{name});report('Saved '+ack.device_name+'. Reconnect using the new USB name.');await axes[label].close();}catch(e){report(e.message);}};
  }
  $('stopAll').onclick=()=>void jog.stop('Stopped. Press a fresh arrow key to jog again.');

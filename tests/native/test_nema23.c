@@ -6,7 +6,7 @@
 #include <assert.h>
 static uint8_t pd_reg, pd_status = 0x18, pd_current = 60, pd_written = 255;
 static uint8_t spi_regs[64];
-static bool spi_broken, pd_absent;
+static bool spi_broken, pd_absent, pd_read_failed;
 static int fake_pd_write(uint8_t address, const uint8_t *data, size_t n) {
     if (address != 0x22 || pd_absent)
         return -1;
@@ -19,7 +19,7 @@ static int fake_pd_write(uint8_t address, const uint8_t *data, size_t n) {
     return n;
 }
 static int fake_pd_read(uint8_t address, uint8_t *data, size_t n) {
-    if (address != 0x22 || pd_absent)
+    if (address != 0x22 || pd_absent || pd_read_failed)
         return -1;
     *data = pd_reg == 0x09 ? pd_status : pd_reg == 0x50 ? pd_current : 0;
     return n;
@@ -67,7 +67,7 @@ static void setup(void) {
     fake_pins[2] = fake_pins[23] = fake_pins[24] = 1;
     fake_us = 3000000;
     fake_connected = true;
-    spi_broken = pd_absent = false;
+    spi_broken = pd_absent = pd_read_failed = false;
     pd_status = 0x18;
     pd_current = 60;
     pd_written = 255;
@@ -111,6 +111,36 @@ static void arm(void) {
     assert(spi_regs[5] == 6 && spi_regs[4] == 0x8f && spi_regs[0x10] == 0x10);
 }
 int main(void) {
+    setup();
+    nema23_set_pg_override(true);
+    pd_status = pd_current = 0;
+    check("{\"cmd\":\"set_pd_voltage\",\"voltage\":15}", true);
+    fake_us += NEMA23_DISCHARGE_US;
+    nema23_poll(fake_us, true, 25);
+    assert(pd_written == 3 && nema23_status().phase == POWER_NEGOTIATING);
+    pd_read_failed = true;
+    fake_us += 1999999;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_status().phase == POWER_NEGOTIATING && !fake_pins[0]);
+    ++fake_us;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_status().phase == POWER_CONTRACT && !nema23_status().contract_valid);
+    arm();
+    fake_us += 5000000;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_ready() && !nema23_status().fault);
+    setup();
+    check("{\"cmd\":\"beep\",\"duration_ms\":2000}", true);
+    indicators(fake_us, fake_motor);
+    assert(buzzer_frequency == 2731 && test_until == fake_us + 2000000);
+    fake_us += 1999999;
+    indicators(fake_us, fake_motor);
+    assert(buzzer_frequency == 2731);
+    ++fake_us;
+    indicators(fake_us, fake_motor);
+    assert(buzzer_frequency == 0);
+    check("{\"cmd\":\"beep\",\"duration_ms\":3001}", false);
+    check("{\"cmd\":\"beep\",\"duration_ms\":\"bad\"}", false);
     setup();
     assert(!nema23_status().ignore_fuse_power_fault);
     check("{\"cmd\":\"set_fuse_power_fault_override\",\"enabled\":1}", false);
@@ -210,9 +240,16 @@ int main(void) {
     check("{\"cmd\":\"arm_power\"}", false);
     setup();
     request20();
-    pd_current = 50;
-    check("{\"cmd\":\"arm_power\"}", false);
-    assert(!fake_pins[0]);
+    pd_current = 0;
+    pd_status = 0;
+    arm();
+    fake_us += 100001;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_ready() && !nema23_status().contract_valid);
+    pd_absent = true;
+    fake_us += 100001;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_ready());
     setup();
     request20();
     spi_broken = true;
@@ -269,6 +306,6 @@ int main(void) {
     assert(!nema23_ready() && !fake_pins[0]);
     setup();
     assert(!nema23_status().ignore_pd_power_good);
-    puts("NEMA23: pins, 12s discharge, verified PD/current, optional PG, explicit arm, SPI mode/readback, "
+    puts("NEMA23: pins, 12s discharge, requested PD with non-blocking status, optional PG, explicit arm, SPI mode/readback, "
          "foldback, thermal/power/USB latches, bounds and 0.2 V/A scaling passed");
 }

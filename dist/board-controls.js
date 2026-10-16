@@ -33,7 +33,7 @@ function mount(axis){
  arm.addEventListener('click',()=>{
   if(!device.last.pd_request_sent||device.last.pd_voltage_requested<9){
    device.enablePending=true;void request('set_pd_voltage',{voltage:20});
-  }else if(/Discharging|Negotiating|Waiting for protected/.test(device.last.power_state||'')){device.enablePending=true;render(device);}
+  }else if(/Discharging|Negotiating|Settling|Waiting for protected/.test(device.last.power_state||'')){device.enablePending=true;render(device);}
   else{void request('arm_power');}
  });
  off.addEventListener('click',()=>{device.enablePending=false;void request('disarm_power');});
@@ -58,7 +58,7 @@ function render(a){
  a.note.textContent='Enable requests 20 V if no motor voltage is selected. Current resets to 1 A on reboot. Ignoring fuse power fault resets on reboot; changing it disconnects motor power.';
  for(const e of a.parent.querySelectorAll('[data-default-power-note]'))e.hidden=true;
  if(!s.live){a.enablePending=false;a.status.textContent='Waiting for live board status.';return;}
- a.status.textContent=`${a.error?a.error+' · ':''}${d.power_error||d.power_state||'Motor rail off'} · PD power-good: ${d.pd_power_good?'yes':'no'}${d.pd_power_good_override?' (ignored)':''} · Fuse fault: ${d.power_fault_asserted?'asserted':'clear'}${d.fuse_power_fault_override?' (ignored)':''} · Contract: ${Number(d.pd_contract_current_a||0).toFixed(2)} A${d.current_foldback_active?' · current reduced for temperature':''}`;
+ a.status.textContent=`${a.error?a.error+' · ':''}${d.power_error||d.power_state||'Motor rail off'} · PD power-good: ${d.pd_power_good?'yes':'no'}${d.pd_power_good_override?' (ignored)':''} · Fuse fault: ${d.power_fault_asserted?'asserted':'clear'}${d.fuse_power_fault_override?' (ignored)':''} · PD reported current: ${Number(d.pd_contract_current_a||0).toFixed(2)} A (informational)${d.current_foldback_active?' · current reduced for temperature':''}`;
 }
 function disconnect(axis){const a=devices.get(axis);if(!a)return;a.enablePending=false;a.last=null;a.seen=0;a.error=null;render(a);}
 const api={controlState,disconnect,receive(axis,d,send){if(d.type!=='telemetry')return;let a=devices.get(axis);if(!a){if(!d.capabilities?.power_arm_required)return;a=mount(axis);if(!a)return;devices.set(axis,a);}a.last=d.compact?{...a.last,...d}:d;a.seen=Date.now();a.send=send;tryEnable(a);render(a);}};

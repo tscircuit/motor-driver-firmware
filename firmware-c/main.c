@@ -261,6 +261,7 @@ static cJSON *capabilities(void) {
     add_bool(c, "power_arm_required", true);
     add_bool(c, "pd_power_good_override_supported", true);
     add_bool(c, "fuse_power_fault_override_supported", true);
+    add_bool(c, "pd_negotiation_verification_required", false);
     add_bool(c, "current_limit_supported", true);
     add_number(c, "current_limit_min_a", 0.1);
     add_number(c, "current_limit_max_a", NEMA23_FULL_SCALE_A);
@@ -268,7 +269,7 @@ static cJSON *capabilities(void) {
     add_number(c, "current_foldback_c", 60);
     add_string(
         c, "power_note",
-        "Request voltage, wait for the verified contract, then arm motor power below 55 C. Changes "
+        "Request voltage, wait for settling, then arm motor power below 55 C. PD status is informational. Changes "
         "discharge for 12 seconds. The raw PD input defaults to 28 V; it is isolated at boot. "
         "PD power-good is ignored by default; PD communication and driver/eFuse checks remain "
         "active.");
@@ -398,7 +399,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.2");
+        add_string(o, "firmware_version", "1.0.3");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -764,8 +765,14 @@ static void command(const char *line) {
         song_length = 0;
         test_until = 0;
     } else if (matches(cmd, "beep")) {
-        song_length = 0;
-        test_until = time_us_64() + 600000;
+        double duration_ms = 600;
+        if (cJSON_HasObjectItem(c, "duration_ms") &&
+            (!number(c, "duration_ms", &duration_ms) || duration_ms < 100 || duration_ms > 3000))
+            error = "Tone duration must be 100-3000 ms";
+        else {
+            song_length = 0;
+            test_until = time_us_64() + (uint64_t)(duration_ms * 1000);
+        }
     } else if (matches(cmd, "test_pulses")) {
 #ifdef MOTOR_BOARD_DRV8847
         error = "DRV8847 has no STEP pin; pulse test is unavailable";
