@@ -88,6 +88,7 @@ static void setup(void) {
     assert(STEP_PIN == 20 && DIR_PIN == 21 && BUZZER_PIN == 3 && CURRENT_VOLTS_PER_AMP == .2);
 }
 static void request20(void) {
+    pd_written = 255;
     check("{\"cmd\":\"set_pd_voltage\",\"voltage\":20}", true);
     fake_us += NEMA23_DISCHARGE_US - 1;
     nema23_poll(fake_us, true, 25);
