@@ -20,6 +20,9 @@ typedef struct {
     bool ignore_overcurrent_shutdown, ignore_winding_current_limit;
     uint8_t pd_address, pd_status, driver_status, driver_faults, current_units;
     double current_peak_a;
+    bool fault_snapshot_valid, fault_driver_register_valid;
+    uint32_t fault_gpio;
+    uint8_t fault_driver_register;
     const char *fault;
 } nema23_status_t;
 void nema23_init(void);

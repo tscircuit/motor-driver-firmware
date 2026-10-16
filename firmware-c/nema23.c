@@ -20,7 +20,16 @@ static void isolate(void) {
     state.spi_valid = false;
     isolated_at = time_us_64();
 }
+static bool spi_read(uint8_t reg, uint8_t *value);
 static void latch(const char *reason) {
+    /* Preserve the triggering inputs before isolate changes the rail and driver. */
+    state.fault_gpio = 0;
+    const uint8_t pins[] = {0, 1, 2, 6, 22, 23, 24};
+    for (unsigned i = 0; i < sizeof(pins); ++i)
+        if (gpio_get(pins[i])) state.fault_gpio |= 1u << pins[i];
+    state.fault_snapshot_valid = true;
+    state.fault_driver_register_valid = gpio_get(0) && gpio_get(6) &&
+        spi_read(0, &state.fault_driver_register);
     isolate();
     gpio_put(8, 0);
     state.phase = POWER_LATCHED;
@@ -307,8 +316,12 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
             latch("PD power loss or eFuse fault");
             return;
         }
-        if (state.phase == POWER_READY && (!gpio_get(24) || nema23_driver_fault())) {
-            latch("Driver or hardware interlock fault");
+        if (state.phase == POWER_READY && !gpio_get(24)) {
+            latch("Protected rail / temperature interlock dropped (GPIO24)");
+            return;
+        }
+        if (state.phase == POWER_READY && nema23_driver_fault()) {
+            latch("DRV8452 nFAULT asserted (GPIO23)");
             return;
         }
         if (now - last_contract >= 100000) {

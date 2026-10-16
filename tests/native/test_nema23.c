@@ -158,6 +158,11 @@ static void test_current_overrides(void) {
     assert(driver_fault());
     nema23_poll(fake_us, true, 25);
     assert(!nema23_ready() && !fake_pins[0]);
+    assert(nema23_status().fault_snapshot_valid && nema23_status().fault_driver_register_valid);
+    assert(nema23_status().fault_driver_register == 0x8a);
+    assert(nema23_status().fault_gpio & (1u << 0));
+    assert(!(nema23_status().fault_gpio & (1u << 23)));
+    assert(nema23_status().fault_gpio & (1u << 24));
     for (int broken = 0; broken < 2; ++broken) {
         setup();
         nema23_set_overcurrent_override(true);
