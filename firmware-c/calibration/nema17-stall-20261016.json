@@ -1,0 +1,407 @@
+{
+  "dataset_sha256": "8f727befb1182c45032702c4191d5cdbc9b5788c32972d9a287aebb9e954254f",
+  "recording_count": 24,
+  "feature_names": [
+    "radial_mean",
+    "radial_cv",
+    "ripple_ratio",
+    "ripple_cv",
+    "raw_ripple_ratio",
+    "radial_step"
+  ],
+  "validation": "Nested leave-one-complete-trial-out; exploratory retrospective evaluation, not a new blind test",
+  "profiles": {
+    "12.5": {
+      "outer": [
+        {
+          "trial": "trial-01.json",
+          "label": 0,
+          "window_ms": 1200,
+          "features": [
+            5
+          ],
+          "alpha": 0.15,
+          "error": 0.21428571428571427
+        },
+        {
+          "trial": "trial-02.json",
+          "label": 1,
+          "window_ms": 1200,
+          "features": [
+            2,
+            3,
+            4
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-03.json",
+          "label": 0,
+          "window_ms": 800,
+          "features": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-04.json",
+          "label": 1,
+          "window_ms": 600,
+          "features": [
+            1
+          ],
+          "alpha": 0.35,
+          "error": 0.6153846153846154
+        },
+        {
+          "trial": "trial-05.json",
+          "label": 0,
+          "window_ms": 1200,
+          "features": [
+            2,
+            3,
+            4
+          ],
+          "alpha": 0.35,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-06.json",
+          "label": 1,
+          "window_ms": 800,
+          "features": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        }
+      ],
+      "selected": {
+        "cv_worst_error": 0.0,
+        "cv_weighted_error": 0.0,
+        "window_ms": 800,
+        "indices": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "alpha": 0.15
+      },
+      "model": {
+        "scale": [
+          0.005,
+          0.005,
+          0.0830498625201936,
+          0.005,
+          0.05365030502278367
+        ],
+        "direction": [
+          0.5370796007051671,
+          1.1292506253016874,
+          0.8421850632014943,
+          0.5209850849678673,
+          1.2804644010173092
+        ],
+        "mid": [
+          0.021623783322510998,
+          0.05679480469007647,
+          0.5385600569087915,
+          0.019015608735681224,
+          0.28174816964080424
+        ],
+        "indices": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "boundary": -1.5847846530051293,
+        "span": 4.731082135272052
+      }
+    },
+    "25.0": {
+      "outer": [
+        {
+          "trial": "trial-07.json",
+          "label": 0,
+          "window_ms": 300,
+          "features": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "alpha": 0.15,
+          "error": 0.09375
+        },
+        {
+          "trial": "trial-08.json",
+          "label": 1,
+          "window_ms": 300,
+          "features": [
+            1
+          ],
+          "alpha": 0.35,
+          "error": 0.03125
+        },
+        {
+          "trial": "trial-09.json",
+          "label": 0,
+          "window_ms": 400,
+          "features": [
+            1
+          ],
+          "alpha": 0.15,
+          "error": 0.1
+        },
+        {
+          "trial": "trial-10.json",
+          "label": 1,
+          "window_ms": 600,
+          "features": [
+            1
+          ],
+          "alpha": 0.35,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-11.json",
+          "label": 0,
+          "window_ms": 600,
+          "features": [
+            1
+          ],
+          "alpha": 0.35,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-12.json",
+          "label": 1,
+          "window_ms": 400,
+          "features": [
+            1
+          ],
+          "alpha": 0.35,
+          "error": 0.0
+        }
+      ],
+      "selected": {
+        "cv_worst_error": 0.0,
+        "cv_weighted_error": 0.0,
+        "window_ms": 400,
+        "indices": [
+          5
+        ],
+        "alpha": 0.15
+      },
+      "model": {
+        "scale": [
+          0.05332230459391156
+        ],
+        "direction": [
+          2.331012609570687
+        ],
+        "mid": [
+          0.22472780805227588
+        ],
+        "indices": [
+          5
+        ],
+        "boundary": -1.3155040894681187,
+        "span": 3.681096306472579
+      }
+    },
+    "60.0": {
+      "outer": [
+        {
+          "trial": "trial-13.json",
+          "label": 0,
+          "window_ms": 100,
+          "features": [
+            3
+          ],
+          "alpha": 0.35,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-14.json",
+          "label": 1,
+          "window_ms": 100,
+          "features": [
+            3
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-15.json",
+          "label": 0,
+          "window_ms": 100,
+          "features": [
+            3
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-16.json",
+          "label": 1,
+          "window_ms": 100,
+          "features": [
+            3
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-17.json",
+          "label": 0,
+          "window_ms": 100,
+          "features": [
+            3
+          ],
+          "alpha": 0.35,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-18.json",
+          "label": 1,
+          "window_ms": 100,
+          "features": [
+            3
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        }
+      ],
+      "selected": {
+        "cv_worst_error": 0.0,
+        "cv_weighted_error": 0.0,
+        "window_ms": 100,
+        "indices": [
+          3
+        ],
+        "alpha": 0.15
+      },
+      "model": {
+        "scale": [
+          0.1171417612734333
+        ],
+        "direction": [
+          2.233875223528795
+        ],
+        "mid": [
+          0.30640454301342623
+        ],
+        "indices": [
+          3
+        ],
+        "boundary": -1.2494695180168447,
+        "span": 3.4103340594862406
+      }
+    },
+    "100.0": {
+      "outer": [
+        {
+          "trial": "trial-19.json",
+          "label": 0,
+          "window_ms": 100,
+          "features": [
+            5
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-20.json",
+          "label": 1,
+          "window_ms": 100,
+          "features": [
+            5
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-21.json",
+          "label": 0,
+          "window_ms": 100,
+          "features": [
+            5
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-22.json",
+          "label": 1,
+          "window_ms": 100,
+          "features": [
+            5
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-23.json",
+          "label": 0,
+          "window_ms": 100,
+          "features": [
+            5
+          ],
+          "alpha": 0.15,
+          "error": 0.0
+        },
+        {
+          "trial": "trial-24.json",
+          "label": 1,
+          "window_ms": 100,
+          "features": [
+            1
+          ],
+          "alpha": 0.15,
+          "error": 0.08571428571428572
+        }
+      ],
+      "selected": {
+        "cv_worst_error": 0.0,
+        "cv_weighted_error": 0.0,
+        "window_ms": 100,
+        "indices": [
+          5
+        ],
+        "alpha": 0.15
+      },
+      "model": {
+        "scale": [
+          0.06092214980434904
+        ],
+        "direction": [
+          2.3331954778126764
+        ],
+        "mid": [
+          0.14221580537027334
+        ],
+        "indices": [
+          5
+        ],
+        "boundary": -1.5305971228517894,
+        "span": 3.9476397254715443
+      }
+    }
+  }
+}

@@ -29,3 +29,15 @@ const native=new Observer();native.receive({...active,capabilities:{current_stal
 assert.equal(native.evaluate(1000).score,80);assert.equal(native.result.firmware,true);assert.equal(native.result.extrapolated,true);
 native.receive({type:'telemetry',motor_enabled:false},1300);assert.equal(native.evaluate(1300).score,null);
 assert.equal(native.evaluate(3000).score,null);
+
+// A high numeric score must not override the firmware's uncertainty decision.
+const ctx=new Proxy({}, {get:(o,k)=>o[k]||(()=>{})});
+const doc={createElement:tag=>({tag,children:[],append(...nodes){this.children.push(...nodes)},setAttribute(){},getContext:()=>ctx,clientWidth:600})};
+const view= require('../dist/current-stall.js').mount(doc);
+view.receive({...active,capabilities:{current_stall_firmware_supported:true},current_stall_valid:true,current_stall_score:90,current_stall_state:'uncertain',current_stall_model:'nema17-20261016-v2',current_stall_reason:'Low-speed validation was inconsistent'},1000);
+view.draw(1000);
+assert.match(view.panel.children[3].textContent,/Uncertain.*Low-speed/);
+assert.doesNotMatch(view.panel.children[3].textContent,/Stall-like/);
+assert.match(view.panel.children[1].textContent,/24 recordings/);
+view.receive({...active,current_stall_state:'free',current_stall_score:10},1100);view.draw(1100);
+assert.match(view.panel.children[3].textContent,/Free-running-like/);
