@@ -23,3 +23,10 @@ build/native-tests/test-current
 "$compiler" -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -DCJSON_NESTING_LIMIT=8 -DMOTOR_BOARD_DRV8452=1 -DNEMA23_HOST_TEST=1 -fsanitize="$sanitize" \
   -Ifirmware-c -Itests/native tests/native/test_nema23.c firmware-c/nema23.c firmware-c/profile.c firmware-c/vendor/cJSON.c -lm -o build/native-tests/test-nema23
 build/native-tests/test-nema23
+
+"$compiler" -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -DCJSON_NESTING_LIMIT=8 -DMOTOR_BOARD_DRV8847=1 -fsanitize="$sanitize" \
+  -Ifirmware-c -Itests/native tests/native/test_drv8847_protocol.c firmware-c/profile.c firmware-c/vendor/cJSON.c -lm -o build/native-tests/test-drv8847-protocol
+build/native-tests/test-drv8847-protocol build/native-tests/drv8847-telemetry.json
+"$compiler" -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -DMOTOR_BOARD_DRV8847=1 -fsanitize="$sanitize" \
+  -Ifirmware-c -Itests/native tests/native/test_drv8847_motor.c firmware-c/profile.c -lm -o build/native-tests/test-drv8847-motor
+build/native-tests/test-drv8847-motor

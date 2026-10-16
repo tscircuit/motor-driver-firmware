@@ -31,18 +31,28 @@
 #define SENSOR_CONFIG 0x60c0
 #define SENSOR_MASK 0x7fd0
 #define HEARTBEAT_US 1500000u
+#ifndef MOTOR_BOARD_DRV8847
 static const char *colors[] = {"off", "red", "green", "blue", "yellow", "cyan", "magenta", "white"};
 static const uint8_t color_bits[] = {0, 1, 2, 4, 3, 6, 5, 7};
+#endif
+#ifdef MOTOR_BOARD_DRV8847
+static const char *resolutions[] = {"full", "half"};
+#else
 static const char *resolutions[] = {"full", "half", "quarter", "eighth", "sixteenth"};
+#endif
+#define RESOLUTION_COUNT (sizeof(resolutions) / sizeof(resolutions[0]))
 static const char *modes[] = {"stopped", "prepared", "steps", "continuous", "braking", "test"};
 static char device_id[17], session[33], stop_reason[96] = "Boot: motor disabled";
 static uint64_t boot_us, heartbeat_us, last_sample, last_emit, test_until, restart_at;
-#ifndef MOTOR_BOARD_DRV8452
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
 static uint64_t power_at;
 #endif
 static bool heartbeat_seen, temperature_valid, alarm, sensor_initialized;
 static double temperature;
-static int pd_voltage = 5, led_selection = -1, led_bits, buzzer_frequency;
+#ifndef MOTOR_BOARD_DRV8847
+static int pd_voltage = 5, led_selection = -1;
+#endif
+static int led_bits, buzzer_frequency;
 static uint16_t song_hz[48], song_ms[48];
 static size_t song_length, song_index;
 static uint64_t song_until;
@@ -56,7 +66,9 @@ static void stop(const char *reason) {
     snprintf(stop_reason, sizeof(stop_reason), "%s", reason);
 }
 static bool power_ready(void) {
-#ifdef MOTOR_BOARD_DRV8452
+#ifdef MOTOR_BOARD_DRV8847
+    return true; /* This PCB has no software motor-power selector or readback. */
+#elif defined(MOTOR_BOARD_DRV8452)
     return nema23_ready();
 #else
     return pd_voltage >= 9 && time_us_64() >= power_at;
@@ -113,6 +125,10 @@ static void buzzer(int hz) {
 }
 static void indicators(uint64_t now, motor_status_t s) {
     bool fault = alarm || driver_fault();
+#ifdef MOTOR_BOARD_DRV8847
+    led_bits = fault ? ((now / 125000) % 2) : s.mode == STOPPED ? 0 : ((now / 500000) % 2);
+    gpio_put(LED_PIN, led_bits != 0);
+#else
     led_bits = fault                ? ((now / 125000) % 2 ? 1 : 0)
                : led_selection >= 0 ? color_bits[led_selection]
                : s.mode == STOPPED  ? 2
@@ -120,6 +136,7 @@ static void indicators(uint64_t now, motor_status_t s) {
     gpio_put(LED_RED_PIN, led_bits & 1);
     gpio_put(LED_GREEN_PIN, led_bits & 2);
     gpio_put(LED_BLUE_PIN, led_bits & 4);
+#endif
     if (alarm) {
         song_length = 0;
         buzzer((now / 1000) % 1000 < 180 ? 2731 : 0);
@@ -134,13 +151,17 @@ static void indicators(uint64_t now, motor_status_t s) {
     buzzer(song_length ? song_hz[song_index] : now < test_until ? 2731 : 0);
 }
 static const char *color_name(void) {
+#ifdef MOTOR_BOARD_DRV8847
+    return led_bits ? "on" : "off";
+#else
     for (int i = 0; i < 8; ++i)
         if (color_bits[i] == led_bits)
             return colors[i];
     return "off";
+#endif
 }
 static const char *resolution_name(int factor) {
-    for (int i = 0; i < 5; ++i)
+    for (unsigned i = 0; i < RESOLUTION_COUNT; ++i)
         if ((1 << i) == factor)
             return resolutions[i];
     return "full";
@@ -173,6 +194,11 @@ static bool emit(cJSON *o) {
     return ok;
 }
 static void currents(cJSON *o) {
+#ifdef MOTOR_BOARD_DRV8847
+    null(o, "winding_current_a");
+    null(o, "current_a");
+    add_bool(o, "current_available", false);
+#else
     double readings[2];
     uint16_t raw[2] = {0};
     bool valid = current_capture_snapshot(raw);
@@ -190,8 +216,10 @@ static void currents(cJSON *o) {
         null(o, "current_a");
     }
     add_bool(o, "current_available", valid);
+#endif
 }
 static void stream_current(void) {
+#ifndef MOTOR_BOARD_DRV8847
     static current_frame_t frame;
     current_capture_read(&frame, tud_cdc_connected());
     if (!frame.count)
@@ -219,12 +247,14 @@ static void stream_current(void) {
     cJSON_AddItemToObject(o, "bins", bins);
     if (!emit(o))
         current_capture_drop(frame.count);
+#endif
 }
 static cJSON *capabilities(void) {
     cJSON *c = cJSON_CreateObject(), *r = cJSON_CreateObject();
-    for (int i = 0; i < 5; ++i)
+    for (unsigned i = 0; i < RESOLUTION_COUNT; ++i)
         add_number(r, resolutions[i], 1 << i);
     cJSON_AddItemToObject(c, "resolutions", r);
+#ifndef MOTOR_BOARD_DRV8847
     cJSON_AddItemToObject(c, "led_colors", cJSON_CreateStringArray(colors, 8));
 #ifdef MOTOR_BOARD_DRV8452
     int volts[] = {5, 9, 12, 15, 20, 28};
@@ -247,10 +277,18 @@ static cJSON *capabilities(void) {
     cJSON_AddItemToObject(c, "pd_voltages",
                           cJSON_CreateIntArray(volts, sizeof(volts) / sizeof(volts[0])));
     add_number(c, "current_volts_per_amp", CURRENT_VOLTS_PER_AMP);
+#endif
     add_number(c, "full_steps_per_revolution", 200);
     add_number(c, "min_speed_sps", MIN_SPEED_SPS);
+#ifndef MOTOR_BOARD_DRV8847
     null(c, "max_speed_sps");
+#endif
+#ifdef MOTOR_BOARD_DRV8847
+    add_number(c, "max_speed_sps", MAX_COIL_STEP_HZ);
+    add_number(c, "max_coil_step_hz", MAX_COIL_STEP_HZ);
+#else
     add_number(c, "max_step_pulse_hz", MAX_PULSE_HZ);
+#endif
     add_number(c, "max_steps", MAX_MOVE_STEPS);
     add_bool(c, "acceleration_supported", true);
     add_bool(c, "deceleration_supported", true);
@@ -270,6 +308,13 @@ static cJSON *capabilities(void) {
     add_string(c, "song_format", "u16le-hz-u16le-ms");
     add_number(c, "song_max_bytes", 192);
     add_bool(c, "hardware_pulse_timing", true);
+#ifdef MOTOR_BOARD_DRV8847
+    add_bool(c, "current_stream_supported", false);
+    add_bool(c, "pulse_test_supported", false);
+    add_string(c, "step_note", "PIO drives the four bridge inputs directly. Full and half steps only; "
+               "half stepping alternates one/two coils without current normalization.");
+    add_string(c, "current_note", "No current measurement connection to the MCU on this PCB.");
+#else
     add_number(c, "current_sample_hz", CURRENT_SAMPLE_HZ);
     add_bool(c, "current_stream_supported", true);
     add_bool(c, "pulse_test_supported", true);
@@ -278,6 +323,7 @@ static cJSON *capabilities(void) {
                "to 200000 Hz; selected increments group pulses.");
     add_string(c, "current_note",
                "Nominal INA240 winding samples; uncalibrated, instantaneous, not supply current.");
+#endif
     return c;
 }
 static void status(bool compact) {
@@ -299,7 +345,9 @@ static void status(bool compact) {
         add_string(o, "sensor_error", "TMP102 unavailable or protection configuration changed");
     add_bool(o, "alarm_active", alarm);
     add_bool(o, "thermal_alert",
-#ifdef MOTOR_BOARD_DRV8452
+#ifdef MOTOR_BOARD_DRV8847
+             !gpio_get(ALERT_PIN)
+#elif defined(MOTOR_BOARD_DRV8452)
              nema23_status().phase == POWER_LATCHED || (power_ready() && !gpio_get(24))
 #else
              false
@@ -313,10 +361,18 @@ static void status(bool compact) {
     add_number(o, "speed_sps", s.speed);
     add_number(o, "acceleration_sps2", s.acceleration);
     add_number(o, "profile_speed_sps", s.profile_speed);
+#ifdef MOTOR_BOARD_DRV8847
+    add_number(o, "coil_step_rate_hz", s.pulse_rate);
+#else
     add_number(o, "pulse_rate_hz", s.pulse_rate);
+#endif
     add_number(o, "position_full_steps", s.position_microsteps / 16.0);
     add_string(o, "stop_reason", stop_reason);
+#ifdef MOTOR_BOARD_DRV8847
+    null(o, "pd_voltage_requested");
+#else
     add_number(o, "pd_voltage_requested", pd_voltage);
+#endif
     null(o, "pd_voltage_measured");
     add_bool(o, "motor_power_ready", power_ready());
 #ifdef MOTOR_BOARD_DRV8452
@@ -352,22 +408,35 @@ static void status(bool compact) {
         add_bool(o, "restarting", restart_at != 0);
         add_bool(o, "led_on", led_bits != 0);
         add_string(o, "led_mode", alarm ? "alarm" : s.mode != STOPPED ? "running" : "off");
+#ifdef MOTOR_BOARD_DRV8847
+        add_string(o, "led_selection", "auto");
+#else
         add_string(o, "led_selection", led_selection < 0 ? "auto" : colors[led_selection]);
+#endif
         add_number(o, "threshold_c", settings.threshold);
         add_bool(o, "buzzer_on", buzzer_frequency != 0);
         add_number(o, "buzzer_frequency_hz", buzzer_frequency);
         add_bool(o, "song_playing", song_length != 0);
         add_number(o, "song_note", song_length ? song_index + 1 : 0);
-        cJSON_AddItemToObject(o, "supported_resolutions", cJSON_CreateStringArray(resolutions, 5));
+        cJSON_AddItemToObject(o, "supported_resolutions", cJSON_CreateStringArray(resolutions, RESOLUTION_COUNT));
         add_number(o, "late_steps", 0);
         add_number(o, "max_step_lateness_us", 0);
         if (s.mode == FINITE || s.mode == BRAKING)
             add_number(o, "steps_remaining",
+#ifdef MOTOR_BOARD_DRV8847
+                       s.target_pulses - s.executed_pulses);
+#else
                        (s.target_pulses - s.executed_pulses) / (16 / s.factor));
+#endif
         else
             null(o, "steps_remaining");
+#ifdef MOTOR_BOARD_DRV8847
+        add_number(o, "steps_executed", s.executed_pulses);
+        add_number(o, "hardware_steps_executed", s.executed_pulses);
+#else
         add_number(o, "steps_executed", s.executed_pulses / (16 / s.factor));
         add_number(o, "hardware_pulses_executed", s.executed_pulses);
+#endif
         add_number(o, "pulse_test_pulses", diagnostic_pulses);
         add_number(o, "pulse_test_elapsed_us", diagnostic_elapsed);
         add_string(o, "board", BOARD_NAME);
@@ -442,7 +511,11 @@ static const char *motion_command(cJSON *c, bool jog) {
     if ((defer_item && !cJSON_IsBool(defer_item)) || (defer && (!finite || jog)))
         return "Only finite moves can be prepared";
     if (!profile_validate(speed, acceleration, factor, (uint32_t)count))
+#ifdef MOTOR_BOARD_DRV8847
+        return "Use full/half stepping at 0.01-20000 selected steps/sec";
+#else
         return "Unsupported resolution or speed exceeds 200000 hardware pulses/sec";
+#endif
     if (!recent_heartbeat())
         return "Waiting for browser heartbeat";
     if (!power_ready())
@@ -452,6 +525,10 @@ static const char *motion_command(cJSON *c, bool jog) {
         return "Temperature must be valid and below the board start limit";
     if (driver_fault())
         return "Driver fault";
+#ifdef MOTOR_BOARD_DRV8847
+    if (!gpio_get(ALERT_PIN))
+        return "TMP102 hardware thermal alert";
+#endif
 #ifdef MOTOR_BOARD_DRV8452
     if (s.mode == STOPPED) {
         const char *driver_error = nema23_prepare_motion();
@@ -536,7 +613,11 @@ static void command(const char *line) {
     else if (matches(cmd, "run_move")) {
         sample();
         if (!recent_heartbeat() || !temperature_valid || temperature >= START_BELOW_C ||
-            driver_fault() || !power_ready()) {
+            driver_fault() || !power_ready()
+#ifdef MOTOR_BOARD_DRV8847
+            || !gpio_get(ALERT_PIN)
+#endif
+        ) {
             stop("Prepared move failed safety check");
             error = "Prepared move failed safety check";
         } else if (!motor_run_prepared())
@@ -586,7 +667,9 @@ static void command(const char *line) {
         error = "Board does not support this command";
 #endif
     } else if (matches(cmd, "set_pd_voltage")) {
-#ifdef MOTOR_BOARD_DRV8452
+#ifdef MOTOR_BOARD_DRV8847
+        error = "Board does not support software voltage selection";
+#elif defined(MOTOR_BOARD_DRV8452)
         double voltage;
         if (s.mode != STOPPED || restart_at)
             error = "Stop motor before changing voltage";
@@ -622,6 +705,9 @@ static void command(const char *line) {
 
 #endif
     } else if (matches(cmd, "set_led")) {
+#ifdef MOTOR_BOARD_DRV8847
+        error = "Board has an automatic single-color status LED";
+#else
         const char *color = string(c, "color");
         int next = -2;
         if (matches(color, "auto"))
@@ -633,6 +719,7 @@ static void command(const char *line) {
             error = "Unsupported LED color";
         else
             led_selection = next;
+#endif
     } else if (matches(cmd, "set_threshold") || matches(cmd, "set_device_name")) {
         if (s.mode != STOPPED || restart_at)
             error = "Stop motor before saving settings";
@@ -675,6 +762,9 @@ static void command(const char *line) {
         song_length = 0;
         test_until = time_us_64() + 600000;
     } else if (matches(cmd, "test_pulses")) {
+#ifdef MOTOR_BOARD_DRV8847
+        error = "DRV8847 has no STEP pin; pulse test is unavailable";
+#else
         double pulses, hz;
         if (s.mode != STOPPED || restart_at)
             error = "Stop motor before pulse test";
@@ -688,6 +778,7 @@ static void command(const char *line) {
             diagnostic_pulses = diagnostic_elapsed = 0;
             previous_mode = DIAGNOSTIC;
         }
+#endif
     } else if (matches(cmd, "bootloader")) {
         stop("Entering bootloader");
         usb_boot_requested = true;
@@ -716,6 +807,10 @@ static void protect(uint64_t now, motor_status_t s) {
             stop("Temperature sensor error");
         else if (temperature >= SHUTDOWN_C)
             stop("Thermal shutdown");
+#ifdef MOTOR_BOARD_DRV8847
+        else if (!gpio_get(ALERT_PIN))
+            stop("TMP102 hardware thermal alert");
+#endif
         else if (driver_fault())
             stop("Driver fault");
         else if (!heartbeat_seen || now - heartbeat_us > HEARTBEAT_US)
@@ -725,7 +820,10 @@ static void protect(uint64_t now, motor_status_t s) {
     }
 }
 static void safe_gpio(void) {
-#ifdef MOTOR_BOARD_DRV8452
+#ifdef MOTOR_BOARD_DRV8847
+    const int pins[] = {22, 18, 19, 20, 21, 25, 16};
+    const int inputs[] = {23, 24};
+#elif defined(MOTOR_BOARD_DRV8452)
     const int pins[] = {0, 6, 8, 10, 11, 25, 3, 17, 18, 19, 20, 21, 22};
     const int inputs[] = {1, 2, 7, 23, 24};
 #else
@@ -735,7 +833,9 @@ static void safe_gpio(void) {
     for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]); ++i) {
         gpio_init(pins[i]);
         gpio_put(pins[i],
-#ifdef MOTOR_BOARD_DRV8452
+#ifdef MOTOR_BOARD_DRV8847
+                 0
+#elif defined(MOTOR_BOARD_DRV8452)
                  pins[i] == 17
 #else
                  pins[i] == 21
@@ -767,7 +867,9 @@ int main(void) {
     motor_init();
     if (!settings_has_saved())
         settings_save(&settings);
+#ifndef MOTOR_BOARD_DRV8847
     current_capture_init();
+#endif
     i2c_init(i2c1, 100000);
     gpio_set_function(26, GPIO_FUNC_I2C);
     gpio_set_function(27, GPIO_FUNC_I2C);

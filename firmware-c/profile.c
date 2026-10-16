@@ -1,4 +1,7 @@
 #include "profile.h"
+#ifdef MOTOR_BOARD_DRV8847
+#include "boards/nema17-drv8847/board.h"
+#endif
 #include <math.h>
 #include <string.h>
 
@@ -10,9 +13,15 @@ int resolution_factor(const char *name) {
     return 0;
 }
 bool profile_validate(double speed, double acceleration, int factor, uint32_t steps) {
+#ifdef MOTOR_BOARD_DRV8847
+    return (factor == 1 || factor == 2) && isfinite(speed) && speed >= MIN_SPEED_SPS &&
+           speed <= MAX_COIL_STEP_HZ && isfinite(acceleration) && acceleration > 0 &&
+           steps <= MAX_MOVE_STEPS;
+#else
     return factor > 0 && factor <= 16 && (factor & (factor - 1)) == 0 && isfinite(speed) &&
            speed >= MIN_SPEED_SPS && speed * (16 / factor) <= MAX_PULSE_HZ &&
            isfinite(acceleration) && acceleration > 0 && steps <= MAX_MOVE_STEPS;
+#endif
 }
 void profile_init(profile_t *p, double target, double acceleration, double initial, uint32_t count,
                   bool fixed) {

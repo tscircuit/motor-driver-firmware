@@ -8,10 +8,14 @@ jobs:
       - run: scripts/test_native.sh
         env:
           NATIVE_SANITIZERS: address,undefined
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node tests/test_drv8847_dashboard.cjs
   rp2040-build:
     strategy:
       matrix:
-        board: [drv8825, nema23_drv8452]
+        board: [drv8825, nema17_drv8847, nema23_drv8452]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

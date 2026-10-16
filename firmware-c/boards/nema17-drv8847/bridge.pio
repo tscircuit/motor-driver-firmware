@@ -1,0 +1,19 @@
+; Native coil sequencer. Each command is [period_ticks - 18, bridge_mask].
+; Clock: 10 MHz. Clear all four inputs for 1 us before changing phase.
+; X counts emitted phases; DMA reads the complemented count from RX FIFO.
+; A blocked pull retains the last phase until software releases ENABLE.
+.program drv8847_bridge
+    mov x, ~null
+.wrap_target
+    pull block
+    mov y, osr
+    pull block
+delay:
+    jmp y-- delay
+    set pins, 0 [9]
+    out pins, 4
+    jmp x-- counted
+counted:
+    mov isr, x
+    push noblock
+.wrap

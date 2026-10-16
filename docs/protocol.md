@@ -90,6 +90,17 @@ The new board supports `full:1`, `half:2`, `quarter:4`, `eighth:8`, `sixteenth:1
 
 ## Native C / PIO firmware
 
+All three [native board targets](../firmware-c/boards/README.md) retain protocol 3.
+The deprecated DRV8847 NEMA17 target uses the same start/jog/decelerate/prepared
+GOTO/settings/buzzer interface, advertising only full/half stepping and fixed
+400 ms ramps. Its capabilities omit `pd_voltages` and `led_colors`, set current
+stream and pulse-test support false, and report unavailable measurements as null.
+`hardware_steps_executed` and `coil_step_rate_hz` describe actual selected bridge
+transitions, not STEP pulses or shaft feedback. It rejects unsupported board
+controls rather than touching the latest board's PD/RGB/ADC pins. Existing web
+pages discover these capabilities without changes. The following STEP/ADC
+additions apply to the DRV8825/DRV8452 targets.
+
 The DRV8825/RGB native application retains protocol 3 and all dashboard commands. Full telemetry adds `firmware: "native-c-pio"`, `firmware_version`, and `firmware_build` (source/configuration fingerprint). `capabilities.hardware_pulse_timing` is true and `max_step_pulse_hz` is 200000. Speed remains selected increments/sec, but requests are rejected when `speed_sps * 16 / resolution_factor` exceeds that hardware pulse limit. Minimum selected speed is 0.01 increments/sec.
 
 `pulse_rate_hz` measures emitted STEP pulses over approximately 100 ms, not shaft speed. `pulse_queue_underruns` counts unexpected PIO FIFO starvation. Native legacy scheduler lateness fields remain zero; there is no cooperative per-step scheduler. Position counts emitted electrical pulses, including partially executed selected increments. Compact frames include resolution, steps/revolution, target speed, acceleration and direction to keep live units current.
