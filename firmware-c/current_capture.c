@@ -13,7 +13,7 @@ void current_capture_analyze(void);
 #endif
 #define RING_WORDS 16384u
 /* Multiple of the ring size, so each DMA restart preserves channel parity. */
-#define BLOCK_WORDS 0xffffe000u
+#define BLOCK_WORDS 0xffffc000u
 static volatile uint16_t ring[RING_WORDS] __attribute__((aligned(32768)));
 static int channel;
 static volatile uint64_t completed_words;
