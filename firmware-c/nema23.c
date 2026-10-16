@@ -18,11 +18,12 @@ static uint8_t control4(void) { return stall_enabled ? 0x55 : 0x45; }
 static bool pg_missing(void) { return !state.ignore_pd_power_good && gpio_get(1); }
 static bool fuse_fault(void) { return !state.ignore_fuse_power_fault && !gpio_get(2); }
 static void isolate(void) {
+    bool was_powered = gpio_get(0);
     gpio_put(22, 0);
     gpio_put(6, 0);
     gpio_put(0, 0);
     state.spi_valid = false;
-    isolated_at = time_us_64();
+    if (was_powered) isolated_at = time_us_64();
 }
 static bool spi_read(uint8_t reg, uint8_t *value);
 static void capture_fault(void) {
@@ -190,7 +191,7 @@ void nema23_init(void) {
     motion_active = stall_enabled = false;
     motion_pulses = stall_enable_pulses = 0;
     low_torque_since = last_stall_sample = 0;
-    last_contract = last_spi = 0;
+    last_contract = last_spi = isolated_at = 0;
     isolate();
     gpio_put(8, 0);
     i2c_init(i2c0, 100000);
@@ -315,6 +316,12 @@ const char *nema23_set_current(double peak_a) {
         state.phase = POWER_CONTRACT;
     return NULL;
 }
+uint32_t nema23_rearm_remaining_ms(void) {
+    if (state.phase == POWER_READY || state.phase == POWER_ENERGIZING) return 0;
+    uint64_t elapsed = time_us_64() - isolated_at;
+    return elapsed >= NEMA23_DISCHARGE_US ? 0 :
+           (uint32_t)((NEMA23_DISCHARGE_US - elapsed + 999) / 1000);
+}
 const char *nema23_arm(bool valid, double temperature) {
     if (!valid || temperature >= 55)
         return "Arming requires a valid temperature below 55 C";
@@ -340,6 +347,9 @@ bool nema23_ready(void) {
 }
 nema23_status_t nema23_status(void) { return state; }
 const char *nema23_phase_name(void) {
+    if ((state.phase == POWER_CONTRACT || state.phase == POWER_OFF) &&
+        state.request_sent && state.requested_voltage >= 9 && nema23_rearm_remaining_ms())
+        return "Waiting to rearm motor power";
     const char *names[] = {"Motor rail off",
                            "Discharging motor rail (12 s)",
                            "Settling requested voltage (2 s)",

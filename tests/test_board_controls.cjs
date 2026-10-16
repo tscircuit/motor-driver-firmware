@@ -28,4 +28,14 @@ const modeD={...currentD,capabilities:{...currentD.capabilities,fault_stop_mode_
 sandbox.window.BoardControls.receive('X',modeD,send);const stopLabel=labels[5],stopFault=stopLabel.children[0],threshold=labels[6].children[0];assert.equal(stopLabel.hidden,false);assert.equal(stopFault.checked,false);assert.equal(threshold.value,'3');
 beforeCurrent=calls.length;stopFault.checked=true;stopFault.change();await new Promise(r=>setImmediate(r));assert.equal(calls[beforeCurrent].cmd,'set_stop_on_detected_fault');assert.equal(calls[beforeCurrent].fields.enabled,true);assert.equal(calls.slice(beforeCurrent).some(c=>c.cmd==='arm_power'),false);
 sandbox.window.BoardControls.receive('X',{...modeD,motor_enabled:true},send);assert.equal(stopFault.disabled,true);assert.equal(threshold.disabled,true);
+let clock=100000;sandbox.Date={now:()=>clock};
+sandbox.window.BoardControls.receive('X',{...currentD,power_rearm_remaining_ms:8000},send);let initial=calls.length;arm.click();await new Promise(r=>setImmediate(r));assert.equal(calls.length,initial);assert.match(arm.textContent,/Enable in 8 s/);
+clock+=8000;sandbox.window.BoardControls.receive('X',{...currentD,power_rearm_remaining_ms:0},send);await new Promise(r=>setImmediate(r));assert.equal(calls.slice(initial).filter(x=>x.cmd==='arm_power').length,1);
+sandbox.window.BoardControls.receive('X',{...currentD,motor_power_ready:true,power_state:'Motor power armed',power_rearm_remaining_ms:0},send);assert.equal(arm.textContent,'Enable motor power');
+// Already-armed telemetry clears a queued enable even if the expected ready state was skipped.
+sandbox.window.BoardControls.receive('X',{...currentD,power_state:'Waiting for protected rail'},send);arm.click();sandbox.window.BoardControls.receive('X',{...currentD,motor_power_ready:true,power_state:'Motor power armed'},send);assert.equal(arm.textContent,'Enable motor power');
+let failOnce=true;const legacySend=async(cmd,fields)=>{calls.push({cmd,fields});if(cmd==='arm_power'&&failOnce){failOnce=false;throw Error('Wait for motor rail discharge before rearming');}};
+sandbox.window.BoardControls.receive('X',currentD,legacySend);initial=calls.length;arm.click();await new Promise(r=>setImmediate(r));assert.match(arm.textContent,/Enable in 12 s/);assert.equal(calls.slice(initial).filter(x=>x.cmd==='arm_power').length,1);
+clock+=12000;sandbox.window.BoardControls.receive('X',currentD,legacySend);await new Promise(r=>setImmediate(r));assert.equal(calls.slice(initial).filter(x=>x.cmd==='arm_power').length,2);
+sandbox.window.BoardControls.disconnect('X');clock+=13000;initial=calls.length;sandbox.window.BoardControls.receive('X',currentD,legacySend);await new Promise(r=>setImmediate(r));assert.equal(calls.length,initial);
 console.log('PASS NEMA23 controls: fresh/stopped/PD/temperature gates, explicit arm, current limit commands, moving interlock');})().catch(e=>{console.error(e);process.exitCode=1;});

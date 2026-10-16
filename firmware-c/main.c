@@ -396,6 +396,7 @@ static void status(bool compact) {
 #ifdef MOTOR_BOARD_DRV8452
     nema23_status_t board = nema23_status();
     add_string(o, "power_state", nema23_phase_name());
+    add_number(o, "power_rearm_remaining_ms", nema23_rearm_remaining_ms());
     add_string(o, "power_error", board.fault ? board.fault : "");
     add_bool(o, "pd_request_sent", board.request_sent);
     add_bool(o, "pd_power_good", !gpio_get(1));
@@ -432,7 +433,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.6");
+        add_string(o, "firmware_version", "1.0.7");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);

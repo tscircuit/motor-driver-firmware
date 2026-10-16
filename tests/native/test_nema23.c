@@ -257,7 +257,22 @@ static void test_reporting_mode(void) {
     assert(!nema23_status().stall_valid);
     setup();
 }
+static void test_rearm_countdown(void) {
+    setup();request20();arm();nema23_disarm();
+    assert(nema23_rearm_remaining_ms()==12000);
+    fake_us+=5000000;
+    assert(!nema23_set_current(2));
+    assert(nema23_rearm_remaining_ms()==7000);
+    assert(strcmp(nema23_phase_name(),"Waiting to rearm motor power")==0);
+    nema23_set_fuse_fault_override(true);
+    assert(nema23_rearm_remaining_ms()==7000);
+    fake_us+=7000000;
+    assert(nema23_rearm_remaining_ms()==0);
+    assert(strcmp(nema23_phase_name(),"Motor rail off")==0);
+    assert(!nema23_arm(true,25));
+}
 int main(void) {
+    test_rearm_countdown();
     test_reporting_mode();
     test_current_overrides();
     setup();

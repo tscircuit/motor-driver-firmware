@@ -45,6 +45,7 @@ void nema23_set_winding_limit_override(bool enabled);
 double nema23_effective_current(void);
 bool nema23_driver_fault(void);
 bool nema23_ready(void);
+uint32_t nema23_rearm_remaining_ms(void);
 nema23_status_t nema23_status(void);
 const char *nema23_phase_name(void);
 uint8_t nema23_current_code(double peak_a);
