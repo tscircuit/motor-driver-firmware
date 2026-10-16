@@ -263,6 +263,13 @@ static void stream_current(void) {
 }
 static cJSON *capabilities(void) {
     cJSON *c = cJSON_CreateObject(), *r = cJSON_CreateObject();
+#ifdef MOTOR_BOARD_DRV8452
+    add_bool(c, "torque_count_supported", true);
+#else
+    add_bool(c, "torque_count_supported", false);
+    add_bool(c, "stall_detection_supported", false);
+    add_string(c, "stall_detection_note", DRIVER_NAME " does not provide torque count or sensorless stall detection. Winding current and electrical faults do not confirm a stalled shaft.");
+#endif
     for (unsigned i = 0; i < RESOLUTION_COUNT; ++i)
         add_number(r, resolutions[i], 1 << i);
     cJSON_AddItemToObject(c, "resolutions", r);
@@ -429,11 +436,16 @@ static void status(bool compact) {
     add_bool(o, "current_foldback_active", board.folded_back);
     add_bool(o, "driver_spi_verified", board.spi_valid && gpio_get(WAKE_PIN));
 #endif
+#ifndef MOTOR_BOARD_DRV8452
+    add_bool(o, "stall_detection_valid", false);
+    null(o, "stall_torque_count");
+    null(o, "stall_suspected");
+#endif
     currents(o);
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.9");
+        add_string(o, "firmware_version", "1.0.10");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);

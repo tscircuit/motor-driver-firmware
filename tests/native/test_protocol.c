@@ -25,6 +25,18 @@ int main(void) {
     sensor_initialized = true;
     sample();
     assert(temperature_valid && !alarm);
+    cJSON *caps = capabilities();
+    assert(cJSON_IsFalse(cJSON_GetObjectItem(caps, "torque_count_supported")));
+    assert(cJSON_IsFalse(cJSON_GetObjectItem(caps, "stall_detection_supported")));
+    assert(strstr(string(caps, "stall_detection_note"), "DRV8825"));
+    cJSON_Delete(caps);
+    output_length = 0;
+    status(false);
+    cJSON *initial = cJSON_Parse(output);
+    assert(initial && cJSON_IsNull(cJSON_GetObjectItem(initial, "stall_torque_count")));
+    assert(cJSON_IsNull(cJSON_GetObjectItem(initial, "stall_suspected")));
+    assert(cJSON_IsFalse(cJSON_GetObjectItem(initial, "stall_detection_valid")));
+    cJSON_Delete(initial);
     check(START, false); /* No heartbeat. */
     command("{\"cmd\":\"heartbeat\"}");
     check(START, false); /* Safe 5 V startup. */
