@@ -1,6 +1,6 @@
 (function(root){
 'use strict';
-const required='1.0.1';
+const required='1.0.2';
 function classify(d){
  const version=d?.firmware_version,match=/^(\d+)\.(\d+)\.(\d+)$/.exec(version||'');
  if(!match||d.firmware!=='native-c-pio')return {upgrade:true,label:version||'Unknown',reason:'Firmware version cannot be verified; install current firmware.'};

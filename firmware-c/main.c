@@ -260,6 +260,7 @@ static cJSON *capabilities(void) {
     int volts[] = {5, 9, 12, 15, 20, 28};
     add_bool(c, "power_arm_required", true);
     add_bool(c, "pd_power_good_override_supported", true);
+    add_bool(c, "fuse_power_fault_override_supported", true);
     add_bool(c, "current_limit_supported", true);
     add_number(c, "current_limit_min_a", 0.1);
     add_number(c, "current_limit_max_a", NEMA23_FULL_SCALE_A);
@@ -384,6 +385,7 @@ static void status(bool compact) {
     add_bool(o, "pd_power_good_override", board.ignore_pd_power_good);
     add_bool(o, "protected_rail_interlock", gpio_get(24));
     add_bool(o, "power_fault_asserted", !gpio_get(2));
+    add_bool(o, "fuse_power_fault_override", board.ignore_fuse_power_fault);
     add_bool(o, "pd_contract_valid", board.contract_valid);
     add_number(o, "pd_contract_current_a", board.current_units * 0.05);
     add_number(o, "pd_protocol_status", board.pd_status);
@@ -396,7 +398,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.1");
+        add_string(o, "firmware_version", "1.0.2");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -647,13 +649,16 @@ static void command(const char *line) {
 #else
         error = "Board does not support this command";
 #endif
-    } else if (matches(cmd, "set_pd_power_good_override")) {
+    } else if (matches(cmd, "set_pd_power_good_override") ||
+               matches(cmd, "set_fuse_power_fault_override")) {
 #ifdef MOTOR_BOARD_DRV8452
         cJSON *enabled = cJSON_GetObjectItemCaseSensitive(c, "enabled");
         if (s.mode != STOPPED || restart_at)
             error = "Stop motor first";
         else if (!cJSON_IsBool(enabled))
             error = "enabled must be a boolean";
+        else if (matches(cmd, "set_fuse_power_fault_override"))
+            nema23_set_fuse_fault_override(cJSON_IsTrue(enabled));
         else
             nema23_set_pg_override(cJSON_IsTrue(enabled));
 #else
