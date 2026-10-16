@@ -13,6 +13,7 @@ static int last_sent_voltage;
 static bool saw_pg_high, require_pg_edge, clear_on_arm;
 static uint8_t expected_current;
 static bool pg_missing(void) { return !state.ignore_pd_power_good && gpio_get(1); }
+static bool fuse_fault(void) { return !state.ignore_fuse_power_fault && !gpio_get(2); }
 static void isolate(void) {
     gpio_put(22, 0);
     gpio_put(6, 0);
@@ -180,6 +181,10 @@ void nema23_set_pg_override(bool enabled) {
     nema23_disarm();
     state.ignore_pd_power_good = enabled;
 }
+void nema23_set_fuse_fault_override(bool enabled) {
+    nema23_disarm();
+    state.ignore_fuse_power_fault = enabled;
+}
 void nema23_disarm(void) {
     isolate();
     gpio_put(8, 0);
@@ -217,7 +222,7 @@ const char *nema23_arm(bool valid, double temperature) {
     return NULL;
 }
 bool nema23_ready(void) {
-    return state.phase == POWER_READY && state.contract_valid && !pg_missing() && gpio_get(2) &&
+    return state.phase == POWER_READY && state.contract_valid && !pg_missing() && !fuse_fault() &&
            gpio_get(24);
 }
 nema23_status_t nema23_status(void) { return state; }
@@ -291,7 +296,7 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
             latch(valid ? "70 C thermal shutdown" : "Temperature sensor unavailable");
             return;
         }
-        if (pg_missing() || (state.phase == POWER_READY && !gpio_get(2))) {
+        if (pg_missing() || (state.phase == POWER_READY && fuse_fault())) {
             latch("PD power loss or eFuse fault");
             return;
         }
@@ -310,7 +315,7 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
     if (state.phase == POWER_ENERGIZING) {
         /* The off-state fault pin may stay low until POWER_ARM is raised.
            Check it after the protected rail comes up, or at startup timeout. */
-        if (gpio_get(24) && gpio_get(2)) {
+        if (gpio_get(24) && !fuse_fault()) {
             state.phase = POWER_READY;
             if (!nema23_prepare_motion()) {
                 gpio_put(22, 0);
@@ -318,7 +323,7 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
                 state.spi_valid = false;
             }
         } else if (now >= deadline)
-            latch(!gpio_get(2) ? "eFuse fault remains asserted after enable"
+            latch(fuse_fault() ? "eFuse fault remains asserted after enable"
                                : "Protected rail failed power-good check");
     }
     if (state.phase == POWER_READY && gpio_get(6)) {

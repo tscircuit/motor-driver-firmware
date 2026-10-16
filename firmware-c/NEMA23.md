@@ -58,3 +58,7 @@ Driver-disabled electrical pulse checks on the second board emitted exact counts
 ## Physical motion test (2026-10-14)
 
 Controller `e6658c344b0a562a`, with its motor connected, was tested with PG ignored, a 15 V request, a reported 3 A PD contract and a 1 A peak current setting. The protected-rail/eFuse interlock and driver SPI readback passed. It completed ten full steps forward and ten full steps backward at 20 full steps/sec with 400 ms ramps (18° commanded each way), exactly 160 emitted pulses each direction, and about 0.7 A observed in an energized winding. Commanded position returned to zero. The user confirmed seeing the motor turn forward and back. The test ended stopped and disarmed. Actual rail voltage, calibrated current and loaded positional accuracy were not measured.
+
+## Optional fuse fault input override
+
+Firmware 1.0.2 adds `set_fuse_power_fault_override` with boolean `enabled`. The dashboard exposes **Ignore fuse power fault** only when supported. It defaults off, resets on reboot, requires a stopped motor and disarms power on either change. It bypasses only GPIO2 fault-input gating; `power_fault_asserted` remains the raw signal and `fuse_power_fault_override` reports the override. The eFuse hardware, GPIO24 protected-rail interlock, PD contract/current, temperature, SPI/driver, USB and heartbeat checks remain active. Enabling the checkbox never arms power or starts motion.

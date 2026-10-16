@@ -88,6 +88,7 @@ static void setup(void) {
     assert(STEP_PIN == 20 && DIR_PIN == 21 && BUZZER_PIN == 3 && CURRENT_VOLTS_PER_AMP == .2);
 }
 static void request20(void) {
+    pd_written = 255;
     check("{\"cmd\":\"set_pd_voltage\",\"voltage\":20}", true);
     fake_us += NEMA23_DISCHARGE_US - 1;
     nema23_poll(fake_us, true, 25);
@@ -110,6 +111,58 @@ static void arm(void) {
     assert(spi_regs[5] == 6 && spi_regs[4] == 0x8f && spi_regs[0x10] == 0x10);
 }
 int main(void) {
+    setup();
+    assert(!nema23_status().ignore_fuse_power_fault);
+    check("{\"cmd\":\"set_fuse_power_fault_override\",\"enabled\":1}", false);
+    check("{\"cmd\":\"set_fuse_power_fault_override\"}", false);
+    check("{\"cmd\":\"set_fuse_power_fault_override\",\"enabled\":true}", true);
+    assert(nema23_status().ignore_fuse_power_fault && !fake_pins[0] && !fake_pins[22]);
+    request20();
+    fake_pins[2] = 0;
+    arm();
+    assert(nema23_ready() && !gpio_get(2));
+    fake_us += 100001;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_ready());
+    output_length = 0;
+    status(false);
+    cJSON *override_status = cJSON_Parse(output);
+    assert(override_status);
+    assert(cJSON_IsTrue(cJSON_GetObjectItem(override_status, "power_fault_asserted")));
+    assert(cJSON_IsTrue(cJSON_GetObjectItem(override_status, "fuse_power_fault_override")));
+    cJSON_Delete(override_status);
+    fake_motor.mode = CONTINUOUS;
+    fake_motor.enabled = true;
+    check("{\"cmd\":\"set_fuse_power_fault_override\",\"enabled\":false}", false);
+    fake_motor.mode = STOPPED;
+    fake_motor.enabled = false;
+    fake_pins[24] = 0;
+    nema23_poll(fake_us, true, 25);
+    assert(!nema23_ready() && !fake_pins[0]);
+    check("{\"cmd\":\"set_fuse_power_fault_override\",\"enabled\":false}", true);
+    assert(!nema23_status().ignore_fuse_power_fault && !fake_pins[0]);
+    setup();
+    nema23_set_fuse_fault_override(true);
+    request20();
+    fake_pins[2] = fake_pins[24] = 0;
+    check("{\"cmd\":\"arm_power\"}", true);
+    fake_us += 1000000;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_status().phase == POWER_LATCHED && !fake_pins[0]);
+    setup();
+    nema23_set_fuse_fault_override(true);
+    request20();
+    fake_pins[2] = 0;
+    arm();
+    check("{\"cmd\":\"set_fuse_power_fault_override\",\"enabled\":false}", true);
+    assert(!fake_pins[0] && !fake_pins[22] && !nema23_ready());
+    nema23_set_fuse_fault_override(true);
+    request20();
+    arm();
+    nema23_poll(fake_us, true, 70);
+    assert(nema23_status().phase == POWER_LATCHED && !fake_pins[0]);
+    setup();
+    assert(!nema23_status().ignore_fuse_power_fault);
     setup();
     request20();
     fake_pins[2] = 0;
