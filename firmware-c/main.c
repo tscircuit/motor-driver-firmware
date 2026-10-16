@@ -57,6 +57,9 @@ static uint16_t song_hz[48], song_ms[48];
 static size_t song_length, song_index;
 static uint64_t song_until;
 static bool buzzer_output_tested, buzzer_output_toggling;
+static uint16_t buzzer_counter_before, buzzer_counter_after;
+static uint buzzer_pin_function;
+static bool buzzer_saw_low, buzzer_saw_high;
 static uint32_t diagnostic_pulses, diagnostic_elapsed;
 static motor_mode_t previous_mode = STOPPED;
 extern volatile bool usb_boot_requested;
@@ -114,6 +117,8 @@ static void buzzer(int hz) {
     pwm_set_enabled(slice, false);
     gpio_put(BUZZER_PIN, 0);
     if (hz) {
+        gpio_set_function(BUZZER_PIN, GPIO_FUNC_PWM);
+        pwm_set_counter(slice, 0);
         /* 1 MHz PWM tick; duty cycle 50%. */
         pwm_set_clkdiv(slice, 125.0f);
         pwm_set_wrap(slice, 1000000 / hz - 1);
@@ -422,6 +427,11 @@ static void status(bool compact) {
         add_number(o, "buzzer_frequency_hz", buzzer_frequency);
         add_bool(o, "buzzer_output_tested", buzzer_output_tested);
         add_bool(o, "buzzer_output_toggling", buzzer_output_toggling);
+        add_number(o, "buzzer_counter_before", buzzer_counter_before);
+        add_number(o, "buzzer_counter_after", buzzer_counter_after);
+        add_number(o, "buzzer_pin_function", buzzer_pin_function);
+        add_bool(o, "buzzer_saw_low", buzzer_saw_low);
+        add_bool(o, "buzzer_saw_high", buzzer_saw_high);
         add_bool(o, "song_playing", song_length != 0);
         add_number(o, "song_note", song_length ? song_index + 1 : 0);
         cJSON_AddItemToObject(o, "supported_resolutions", cJSON_CreateStringArray(resolutions, RESOLUTION_COUNT));
@@ -779,6 +789,8 @@ static void command(const char *line) {
                 /* Read the pad input during a short bounded tone-output test.
                    This detects output transitions, not audible sound. */
                 buzzer(2731);
+                buzzer_pin_function = gpio_get_function(BUZZER_PIN);
+                buzzer_counter_before = pwm_get_counter(pwm_gpio_to_slice_num(BUZZER_PIN));
                 bool saw_low = false, saw_high = false;
                 for (unsigned i = 0; i < 50; ++i) {
                     bool level = gpio_get(BUZZER_PIN);
@@ -786,6 +798,9 @@ static void command(const char *line) {
                     saw_high |= level;
                     sleep_us(20);
                 }
+                buzzer_counter_after = pwm_get_counter(pwm_gpio_to_slice_num(BUZZER_PIN));
+                buzzer_saw_low = saw_low;
+                buzzer_saw_high = saw_high;
                 buzzer_output_tested = true;
                 buzzer_output_toggling = saw_low && saw_high;
             }

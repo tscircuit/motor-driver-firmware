@@ -49,6 +49,9 @@ void adc_init(void) {}
 void adc_gpio_init(uint pin) {}
 void adc_select_input(uint channel) {}
 uint16_t adc_read(void) { return 2048; }
+uint gpio_get_function(uint pin) { return GPIO_FUNC_PWM; }
+void pwm_set_counter(uint slice, uint16_t value) {}
+uint16_t pwm_get_counter(uint slice) { return 0; }
 uint pwm_gpio_to_slice_num(uint pin) { return 0; }
 void pwm_set_enabled(uint slice, bool enabled) {}
 void pwm_set_clkdiv(uint slice, float divisor) {}
