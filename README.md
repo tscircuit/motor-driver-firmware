@@ -1,6 +1,6 @@
 # Motor driver firmware
 
-**The DRV8825/RGB controller now has native C firmware with PIO step generation.** Build and flash its UF2 using the [native installation guide](firmware-c/README.md). The existing public dashboard and gantry controls use the same protocol. The sections below describe the retained MicroPython firmware for older boards and as a migration reference.
+**All three retained board generations have separate native C targets.** See the [firmware target directory](firmware-c/boards/README.md): second-generation NEMA17/DRV8847, latest NEMA17/DRV8825 (PCB 1.0.42), and NEMA23/DRV8452 (PCB 1.3.2). The oldest ordered NEMA17 board is retired. The latest NEMA17 target remains the default and retains its existing behavior. Build and flash the matching UF2 using the [native installation guide](firmware-c/README.md). All targets use the existing public dashboard and gantry protocol. The sections below describe retained MicroPython firmware as a migration reference.
 
 MicroPython motor-control firmware with a Web Serial dashboard. Motion and safety logic are separated from driver chips, board wiring, and MCU services so additional hardware can reuse the controller and protocol.
 

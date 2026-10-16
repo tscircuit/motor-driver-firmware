@@ -115,7 +115,13 @@ bool motor_start(int factor, int direction, double speed, double acceleration, u
                                   .speed = speed,
                                   .acceleration = acceleration,
                                   .enabled = true,
-                                  .target_pulses = steps * (16 / factor)};
+                                  .target_pulses = steps *
+#ifdef MOTOR_BOARD_DRV8847
+                                                   1
+#else
+                                                   (16 / factor)
+#endif
+    };
     return true;
 }
 bool motor_retarget(int factor, int direction, double speed, double acceleration, bool fixed) {

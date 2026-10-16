@@ -1,0 +1,15 @@
+#define BOARD_NAME "RP2040 / DRV8825 / RGB"
+#define BOARD_ID "rp2040_drv8825"
+#define DRIVER_NAME "DRV8825"
+#define STEP_PIN 18
+#define DIR_PIN 19
+#define WAKE_PIN 22
+#define ARM_PIN 21
+#define LED_RED_PIN 25
+#define LED_GREEN_PIN 2
+#define LED_BLUE_PIN 3
+#define BUZZER_PIN 16
+#define CURRENT_VOLTS_PER_AMP 1.0
+#define START_BELOW_C 60
+#define SHUTDOWN_C 75
+#define SENSOR_LOW_C 60
