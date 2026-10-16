@@ -19,7 +19,7 @@ Install `build/nema23/motorcontrol.uf2` through the **programming USB** port's R
 - INA240A1 and 10 mΩ shunts produce **0.2 V/A**, referenced to nominal 1.65 V. Both regular telemetry and high-rate graph frames use this scale. Readings remain uncalibrated winding currents, not supply currents.
 - Default current is **1 A peak**, approximately 0.707 A sinusoidal RMS. `set_current_limit` accepts 0.1–3.965 A peak while stopped. The current DAC rounds down using the board's nominal external VREF divider and TI's 0.66 V/A transimpedance. The limit is not saved and returns to 1 A on reboot.
 - DRV8452 is configured and read back with ARM low before every start. Hardware is fixed to 1/16, with full/half/quarter/eighth/sixteenth logical increments grouping pulses. Rising-edge STEP, smart-tune ripple decay and latched OCP/OTSD are explicit. Automatic interpolation, auto-torque, custom tables and untuned sensorless stall detection are disabled. Optional AS5600 is DNP and not used.
-- TMP102 comparator thresholds are 70°C high / 55°C low and its configuration is verified. Starting/rearming requires valid temperature **below 55°C**. At 60°C, moving current folds back to half and stays reduced until explicit re-arm. At 70°C or on sensor, driver, SPI/configuration, PD or eFuse failure, ARM/WAKE/POWER_ARM are latched off. Heartbeat expiry or USB loss stops pulses and disarms power. Renewing a heartbeat does not restart motion.
+- TMP102 comparator thresholds are 70°C high / 55°C low and its configuration is verified. Starting/rearming requires valid temperature **below 55°C**. At 60°C, moving current folds back to half and stays reduced until explicit re-arm. At 70°C or on sensor, driver, SPI/configuration, strict PG or non-overridden eFuse failure, ARM/WAKE/POWER_ARM are latched off. Heartbeat expiry or USB loss stops pulses and disarms power. Renewing a heartbeat does not restart motion.
 
 ## Power sequencing and limits
 
@@ -27,11 +27,11 @@ The **raw motor USB input defaults to 28 V in hardware**, independently of MCU f
 
 `set_pd_voltage` queues 5/9/12/15/20/28 V. ARM, WAKE and POWER_ARM remain low for a 12-second rail discharge interval before the write. The board's 220 µF / 10 kΩ nominal time constant is 2.2 seconds; the delay is not a voltage measurement and must be checked on physical bring-up. Voltage changes never restart motion.
 
-**PG is ignored by default.** The earlier implementation waited for PD_PG_N before allowing the I2C request, which could prevent the charger from ever receiving its first software voltage request. Firmware now enables the buffered bus only after an explicit voltage request and validates CH224A communication, protocol status and available current. It does not need an initial 28 V EPR contract to request a supported lower voltage. The buffer starts disabled and is disabled on disarm, communication failure or fault.
+**PG is ignored by default.** The earlier implementation waited for PD_PG_N before allowing the I2C request, which could prevent the charger from ever receiving its first software voltage request. Firmware now enables the buffered bus only after an explicit voltage request and sends the CH224A voltage request; status and available current are informational. It does not need an initial 28 V EPR contract to request a supported lower voltage. The buffer starts disabled and is disabled on disarm, communication failure or fault.
 
-CH224A addresses 0x22/0x23 are detected. Register 0x0A values 0–5 request fixed voltages. After two seconds settling, require PD protocol-active status (0x09 bit 3), EPR-active status (bit 4) for 28 V, and at least a **3 A available contract** from register 0x50. An ACK alone is not successful negotiation. No PPS/AVS or >28 V requests are sent. Software PG gating and its transition check are optional; `set_pd_power_good_override` with `enabled:false` restores strict PG checks until reboot. Changing this setting disarms the rail. `pd_power_good` remains the raw input and `pd_power_good_override` identifies whether it is ignored.
+CH224A addresses 0x22/0x23 are tried when writing a fixed-voltage request. After an acknowledged write, firmware waits two seconds and permits explicit arming. PD status, current registers and PG transitions do not verify the requested voltage and do not block or shut down power. These registers are read only for informational telemetry; missing or low readings are not a fault. Software PG gating remains optional via `set_pd_power_good_override`; PG is ignored by default.
 
-After the contract is verified, the user must explicitly issue `arm_power`. Firmware verifies temperature and fresh contract status, enables the eFuse, waits for the shared protected-rail interlock, wakes the driver and verifies SPI with ARM low. The driver is then returned to sleep while awaiting a motion command. Supply and interlock status are monitored while armed. Actual PD or protected-rail voltages are unavailable because neither has an MCU ADC path.
+After the voltage request has settled, the user must explicitly issue `arm_power`. Firmware verifies temperature and optional strict PG status, enables the eFuse, waits for the shared protected-rail interlock, wakes the driver and verifies SPI with ARM low. The driver is then returned to sleep while awaiting a motion command. Supply and interlock status are monitored while armed. Actual PD or protected-rail voltages are unavailable because neither has an MCU ADC path.
 
 ```json
 {"cmd":"set_current_limit","peak_a":1}
@@ -45,7 +45,7 @@ Wait for `power_state="Ready to arm motor power"` before arming. Existing motion
 
 ## Evidence and remaining physical checks
 
-Host tests exercise the production parser and power/driver module with simulated GPIO, I2C and SPI: disabled boot pins, discharge delay, contract-current and PG gates, explicit arm, readback failure, configuration corruption, foldback/shutdown, power/USB loss, bounds and current scale. CI cross-builds both board targets. These tests do not establish actual power delivery, SPI waveforms, current calibration, motor torque or physical travel.
+Host tests exercise the production parser and power/driver module with simulated GPIO, I2C and SPI: disabled boot pins, discharge delay, non-blocking PD status and optional strict PG gating, explicit arm, readback failure, configuration corruption, foldback/shutdown, power/USB loss, bounds and current scale. CI cross-builds both board targets. These tests do not establish actual power delivery, SPI waveforms, current calibration, motor torque or physical travel.
 
 On 2026-10-14, the first connected NEMA23 controller (`e6658c344b36892b`) enumerated as native C after flashing, reported valid TMP102 temperature (25.1°C), both current channels, no driver/eFuse fault, a 1 A peak limit and disabled motor/power rail. Motor USB power-good was absent. No rail arming or motor movement was requested during that check.
 
@@ -61,4 +61,8 @@ Controller `e6658c344b0a562a`, with its motor connected, was tested with PG igno
 
 ## Optional fuse fault input override
 
-Firmware 1.0.2 adds `set_fuse_power_fault_override` with boolean `enabled`. The dashboard exposes **Ignore fuse power fault** only when supported. It defaults off, resets on reboot, requires a stopped motor and disarms power on either change. It bypasses only GPIO2 fault-input gating; `power_fault_asserted` remains the raw signal and `fuse_power_fault_override` reports the override. The eFuse hardware, GPIO24 protected-rail interlock, PD contract/current, temperature, SPI/driver, USB and heartbeat checks remain active. Enabling the checkbox never arms power or starts motion.
+Firmware 1.0.2 adds `set_fuse_power_fault_override` with boolean `enabled`. The dashboard exposes **Ignore fuse power fault** only when supported. It defaults off, resets on reboot, requires a stopped motor and disarms power on either change. It bypasses only GPIO2 fault-input gating; `power_fault_asserted` remains the raw signal and `fuse_power_fault_override` reports the override. The eFuse hardware, GPIO24 protected-rail interlock, temperature, SPI/driver, USB and heartbeat checks remain active. Enabling the checkbox never arms power or starts motion.
+
+## Test tone
+
+The `beep` command accepts optional `duration_ms` from 100 to 3000 ms (default 600 ms). The single-motor/gantry Test tone button requests two seconds at 2731 Hz. `buzzer_on` and `buzzer_frequency_hz` report the commanded PWM; they are not an acoustic measurement. Tone requests work while motor power is disarmed or fault-latched.

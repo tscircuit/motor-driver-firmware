@@ -56,6 +56,10 @@ static int led_bits, buzzer_frequency;
 static uint16_t song_hz[48], song_ms[48];
 static size_t song_length, song_index;
 static uint64_t song_until;
+static bool buzzer_output_tested, buzzer_output_toggling;
+static uint16_t buzzer_counter_before, buzzer_counter_after;
+static uint buzzer_pin_function;
+static bool buzzer_saw_low, buzzer_saw_high;
 static uint32_t diagnostic_pulses, diagnostic_elapsed;
 static motor_mode_t previous_mode = STOPPED;
 extern volatile bool usb_boot_requested;
@@ -113,6 +117,8 @@ static void buzzer(int hz) {
     pwm_set_enabled(slice, false);
     gpio_put(BUZZER_PIN, 0);
     if (hz) {
+        gpio_set_function(BUZZER_PIN, GPIO_FUNC_PWM);
+        pwm_set_counter(slice, 0);
         /* 1 MHz PWM tick; duty cycle 50%. */
         pwm_set_clkdiv(slice, 125.0f);
         pwm_set_wrap(slice, 1000000 / hz - 1);
@@ -261,6 +267,7 @@ static cJSON *capabilities(void) {
     add_bool(c, "power_arm_required", true);
     add_bool(c, "pd_power_good_override_supported", true);
     add_bool(c, "fuse_power_fault_override_supported", true);
+    add_bool(c, "pd_negotiation_verification_required", false);
     add_bool(c, "current_limit_supported", true);
     add_number(c, "current_limit_min_a", 0.1);
     add_number(c, "current_limit_max_a", NEMA23_FULL_SCALE_A);
@@ -268,7 +275,7 @@ static cJSON *capabilities(void) {
     add_number(c, "current_foldback_c", 60);
     add_string(
         c, "power_note",
-        "Request voltage, wait for the verified contract, then arm motor power below 55 C. Changes "
+        "Request voltage, wait for settling, then arm motor power below 55 C. PD status is informational. Changes "
         "discharge for 12 seconds. The raw PD input defaults to 28 V; it is isolated at boot. "
         "PD power-good is ignored by default; PD communication and driver/eFuse checks remain "
         "active.");
@@ -398,7 +405,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.2");
+        add_string(o, "firmware_version", "1.0.3");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -418,6 +425,13 @@ static void status(bool compact) {
         add_number(o, "threshold_c", settings.threshold);
         add_bool(o, "buzzer_on", buzzer_frequency != 0);
         add_number(o, "buzzer_frequency_hz", buzzer_frequency);
+        add_bool(o, "buzzer_output_tested", buzzer_output_tested);
+        add_bool(o, "buzzer_output_toggling", buzzer_output_toggling);
+        add_number(o, "buzzer_counter_before", buzzer_counter_before);
+        add_number(o, "buzzer_counter_after", buzzer_counter_after);
+        add_number(o, "buzzer_pin_function", buzzer_pin_function);
+        add_bool(o, "buzzer_saw_low", buzzer_saw_low);
+        add_bool(o, "buzzer_saw_high", buzzer_saw_high);
         add_bool(o, "song_playing", song_length != 0);
         add_number(o, "song_note", song_length ? song_index + 1 : 0);
         cJSON_AddItemToObject(o, "supported_resolutions", cJSON_CreateStringArray(resolutions, RESOLUTION_COUNT));
@@ -764,8 +778,33 @@ static void command(const char *line) {
         song_length = 0;
         test_until = 0;
     } else if (matches(cmd, "beep")) {
-        song_length = 0;
-        test_until = time_us_64() + 600000;
+        double duration_ms = 600;
+        if (cJSON_HasObjectItem(c, "duration_ms") &&
+            (!number(c, "duration_ms", &duration_ms) || duration_ms < 100 || duration_ms > 3000))
+            error = "Tone duration must be 100-3000 ms";
+        else {
+            song_length = 0;
+            test_until = time_us_64() + (uint64_t)(duration_ms * 1000);
+            if (!alarm) {
+                /* Read the pad input during a short bounded tone-output test.
+                   This detects output transitions, not audible sound. */
+                buzzer(2731);
+                buzzer_pin_function = gpio_get_function(BUZZER_PIN);
+                buzzer_counter_before = pwm_get_counter(pwm_gpio_to_slice_num(BUZZER_PIN));
+                bool saw_low = false, saw_high = false;
+                for (unsigned i = 0; i < 50; ++i) {
+                    bool level = gpio_get(BUZZER_PIN);
+                    saw_low |= !level;
+                    saw_high |= level;
+                    sleep_us(20);
+                }
+                buzzer_counter_after = pwm_get_counter(pwm_gpio_to_slice_num(BUZZER_PIN));
+                buzzer_saw_low = saw_low;
+                buzzer_saw_high = saw_high;
+                buzzer_output_tested = true;
+                buzzer_output_toggling = saw_low && saw_high;
+            }
+        }
     } else if (matches(cmd, "test_pulses")) {
 #ifdef MOTOR_BOARD_DRV8847
         error = "DRV8847 has no STEP pin; pulse test is unavailable";

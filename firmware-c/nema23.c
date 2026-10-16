@@ -9,8 +9,7 @@
 #include <math.h>
 static nema23_status_t state;
 static uint64_t deadline, last_contract, last_spi, isolated_at;
-static int last_sent_voltage;
-static bool saw_pg_high, require_pg_edge, clear_on_arm;
+static bool clear_on_arm;
 static uint8_t expected_current;
 static bool pg_missing(void) { return !state.ignore_pd_power_good && gpio_get(1); }
 static bool fuse_fault(void) { return !state.ignore_fuse_power_fault && !gpio_get(2); }
@@ -32,15 +31,9 @@ static bool read_pd_at(uint8_t address, uint8_t reg, uint8_t *value) {
     return i2c_write_timeout_us(i2c0, address, &reg, 1, true, 2000) == 1 &&
            i2c_read_timeout_us(i2c0, address, value, 1, false, 2000) == 1;
 }
-static bool pd_contract(void) {
+static bool read_pd_status(void) {
     state.contract_valid = false;
-    /* PG can stay deasserted until a software voltage request. Only probe
-       following an explicit request; require PD status/current and actual
-       eFuse/driver checks before allowing motion. Strict PG is optional. */
-    if (pg_missing()) {
-        gpio_put(8, 0);
-        return false;
-    }
+    /* Informational register readings only; never gate arming or motion. */
     gpio_put(8, 1);
     uint8_t status, current;
     if (!state.pd_address) {
@@ -57,8 +50,7 @@ static bool pd_contract(void) {
     }
     state.pd_status = status;
     state.current_units = current;
-    /* Refuse BC/QC fallback; current is meaningful only for a PD contract.
-       A 3 A contract covers the nominal 2.46 A eFuse input limit with margin. */
+    /* Report the observed PD status separately from requested voltage. */
     state.contract_valid =
         (status & 0x08) && (state.requested_voltage != 28 || (status & 0x10)) && current >= 60;
     return state.contract_valid;
@@ -148,7 +140,6 @@ void nema23_init(void) {
                               .requested_voltage = 5,
                               .current_peak_a = 1.0,
                               .ignore_pd_power_good = true};
-    last_sent_voltage = 0;
     last_contract = last_spi = 0;
     isolate();
     gpio_put(8, 0);
@@ -207,11 +198,11 @@ const char *nema23_arm(bool valid, double temperature) {
         return "Arming requires a valid temperature below 55 C";
     if (!state.request_sent || state.requested_voltage < 9 || state.phase == POWER_DISCHARGE ||
         state.phase == POWER_NEGOTIATING)
-        return "Request motor voltage and wait for a verified contract";
+        return "Request motor voltage and wait for settling";
     if (time_us_64() - isolated_at < NEMA23_DISCHARGE_US)
         return "Wait for motor rail discharge before rearming";
-    if (!pd_contract())
-        return "PD power-good and a sufficient PD/EPR current contract are required";
+    if (pg_missing())
+        return "PD power-good is missing (strict PG mode)";
     state.fault = NULL;
     state.folded_back = false;
     state.spi_valid = false;
@@ -222,14 +213,14 @@ const char *nema23_arm(bool valid, double temperature) {
     return NULL;
 }
 bool nema23_ready(void) {
-    return state.phase == POWER_READY && state.contract_valid && !pg_missing() && !fuse_fault() &&
+    return state.phase == POWER_READY && !pg_missing() && !fuse_fault() &&
            gpio_get(24);
 }
 nema23_status_t nema23_status(void) { return state; }
 const char *nema23_phase_name(void) {
     const char *names[] = {"Motor rail off",
                            "Discharging motor rail (12 s)",
-                           "Negotiating PD contract",
+                           "Settling requested voltage (2 s)",
                            "Ready to arm motor power",
                            "Waiting for protected rail",
                            "Motor power armed",
@@ -243,11 +234,6 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
         /* In optional strict mode, wait for hardware PG before probing. */
         if (pg_missing())
             return;
-        state.pd_address = 0;
-        if (!pd_contract() && !state.pd_address) {
-            latch("CH224A is not responding");
-            return;
-        }
         int volts = state.requested_voltage;
         uint8_t code = volts == 5    ? 0
                        : volts == 9  ? 1
@@ -256,39 +242,30 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
                        : volts == 20 ? 4
                                      : 5;
         uint8_t tx[2] = {0x0a, code};
-        require_pg_edge = last_sent_voltage != volts;
-        saw_pg_high = false;
-        if (i2c_write_timeout_us(i2c0, state.pd_address, tx, 2, false, 2000) != 2) {
+        gpio_put(8, 1);
+        state.pd_address = 0;
+        for (uint8_t address = 0x22; address <= 0x23; ++address) {
+            if (i2c_write_timeout_us(i2c0, address, tx, 2, false, 2000) == 2) {
+                state.pd_address = address;
+                break;
+            }
+        }
+        if (!state.pd_address) {
             latch("PD voltage request failed");
             return;
         }
-        last_sent_voltage = volts;
         state.request_sent = true;
         state.contract_valid = false;
         state.phase = POWER_NEGOTIATING;
-        deadline = now + 5000000;
+        deadline = now + 2000000;
         last_contract = 0;
     }
-    if (state.phase == POWER_NEGOTIATING) {
-        if (pg_missing())
-            saw_pg_high = true;
-        if (now >= deadline) {
-            latch("PD negotiation was not verified");
-            return;
-        }
-        if ((!require_pg_edge || saw_pg_high || state.ignore_pd_power_good) && !pg_missing() &&
-            now + 3000000 >= deadline && now - last_contract >= 100000) {
-            last_contract = now;
-            if (state.requested_voltage == 5) {
-                uint8_t value;
-                gpio_put(8, 1);
-                if (read_pd_at(state.pd_address, 0x09, &value)) {
-                    state.phase = POWER_OFF;
-                    gpio_put(8, 0);
-                }
-            } else if (pd_contract())
-                state.phase = POWER_CONTRACT;
-        }
+    if (state.phase == POWER_NEGOTIATING && now >= deadline) {
+        (void)read_pd_status();
+        last_contract = now;
+        state.phase = state.requested_voltage == 5 ? POWER_OFF : POWER_CONTRACT;
+        if (state.phase == POWER_OFF)
+            gpio_put(8, 0);
     }
     bool armed = state.phase == POWER_READY || state.phase == POWER_ENERGIZING;
     if (armed) {
@@ -306,10 +283,7 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
         }
         if (now - last_contract >= 100000) {
             last_contract = now;
-            if (!pd_contract()) {
-                latch("PD contract lost or insufficient current");
-                return;
-            }
+            (void)read_pd_status();
         }
     }
     if (state.phase == POWER_ENERGIZING) {
