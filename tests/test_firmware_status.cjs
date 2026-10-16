@@ -1,0 +1,12 @@
+const assert=require('node:assert/strict');
+const {classify}=require('../dist/firmware-status.js');
+for(const version of ['1.0.0',undefined,'bad','1.0.1-dev'])assert.equal(classify({firmware:'native-c-pio',firmware_version:version}).upgrade,true);
+for(const version of ['1.0.1','1.0.2','1.0.10','2.0.0'])assert.equal(classify({firmware:'native-c-pio',firmware_version:version}).upgrade,false);
+assert.equal(classify({firmware_version:'1.0.1',firmware:'micropython'}).upgrade,true);
+const nodes={},created=[];global.window={document:{getElementById:id=>nodes[id],createElement:()=>({style:{},setAttribute(){}})}};delete require.cache[require.resolve('../dist/firmware-status.js')];require('../dist/firmware-status.js');
+for(const axis of ['X','Y'])nodes['connect'+axis]={parentNode:{append:e=>created.push(e)}};
+const api=window.FirmwareStatus;
+api.receive('X',{type:'telemetry',firmware:'native-c-pio',firmware_version:'1.0.0'});api.receive('Y',{type:'telemetry',firmware:'native-c-pio',firmware_version:'1.0.1'});
+assert.match(created[0].textContent,/⚠.*Upgrade needed/);assert.doesNotMatch(created[1].textContent,/⚠/);
+api.receive('Y',{type:'telemetry',compact:true,temperature_c:25});assert.match(created[1].textContent,/1.0.1/);
+api.disconnect('X');assert.match(created[0].textContent,/disconnected/);console.log('PASS firmware version comparison, per-controller indicators, compact frames and disconnect');
