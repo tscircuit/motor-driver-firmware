@@ -207,8 +207,6 @@ const char *nema23_arm(bool valid, double temperature) {
         return "Wait for motor rail discharge before rearming";
     if (!pd_contract())
         return "PD power-good and a sufficient PD/EPR current contract are required";
-    if (!gpio_get(2))
-        return "eFuse fault remains asserted";
     state.fault = NULL;
     state.folded_back = false;
     state.spi_valid = false;
@@ -293,7 +291,7 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
             latch(valid ? "70 C thermal shutdown" : "Temperature sensor unavailable");
             return;
         }
-        if (pg_missing() || !gpio_get(2)) {
+        if (pg_missing() || (state.phase == POWER_READY && !gpio_get(2))) {
             latch("PD power loss or eFuse fault");
             return;
         }
@@ -310,7 +308,9 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
         }
     }
     if (state.phase == POWER_ENERGIZING) {
-        if (gpio_get(24)) {
+        /* The off-state fault pin may stay low until POWER_ARM is raised.
+           Check it after the protected rail comes up, or at startup timeout. */
+        if (gpio_get(24) && gpio_get(2)) {
             state.phase = POWER_READY;
             if (!nema23_prepare_motion()) {
                 gpio_put(22, 0);
@@ -318,7 +318,8 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
                 state.spi_valid = false;
             }
         } else if (now >= deadline)
-            latch("Protected rail failed power-good check");
+            latch(!gpio_get(2) ? "eFuse fault remains asserted after enable"
+                               : "Protected rail failed power-good check");
     }
     if (state.phase == POWER_READY && gpio_get(6)) {
         if (temperature >= 60 && !state.folded_back) {

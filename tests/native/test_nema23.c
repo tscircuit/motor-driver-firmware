@@ -111,6 +111,26 @@ static void arm(void) {
 }
 int main(void) {
     setup();
+    request20();
+    fake_pins[2] = 0;
+    fake_pins[24] = 0;
+    check("{\"cmd\":\"arm_power\"}", true);
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_status().phase == POWER_ENERGIZING && fake_pins[0] && !fake_pins[22]);
+    fake_pins[2] = fake_pins[24] = 1;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_ready());
+    fake_pins[2] = 0;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_status().phase == POWER_LATCHED && !fake_pins[0]);
+    setup();
+    request20();
+    fake_pins[2] = fake_pins[24] = 0;
+    check("{\"cmd\":\"arm_power\"}", true);
+    fake_us += 1000000;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_status().phase == POWER_LATCHED && !fake_pins[0] && !fake_pins[22]);
+    setup();
     check("{\"cmd\":\"arm_power\"}", false);
     check("{\"cmd\":\"set_pd_voltage\",\"voltage\":48}", false);
     request20();
