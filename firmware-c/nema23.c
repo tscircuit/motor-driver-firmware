@@ -83,16 +83,38 @@ uint8_t nema23_current_code(double peak_a) {
         steps = 256;
     return (uint8_t)(steps - 1);
 }
+static uint8_t control3(void) { return state.ignore_overcurrent_shutdown ? 0x3c : 0x38; }
+double nema23_effective_current(void) {
+    double peak = state.ignore_winding_current_limit ? NEMA23_FULL_SCALE_A : state.current_peak_a;
+    return peak * (state.folded_back ? 0.5 : 1);
+}
+static bool driver_faults_acceptable(void) {
+    uint8_t faults;
+    if (!spi_read(0, &faults))
+        return false;
+    state.driver_faults = faults;
+    /* Only OCP (bit 3) and its FAULT summary (bit 7) may be ignored.
+       A bare low nFAULT, unreadable SPI, or any other fault still blocks. */
+    if (state.ignore_overcurrent_shutdown && (faults & 0x08) && !(faults & ~0x88))
+        return true;
+    return !faults && gpio_get(23);
+}
+bool nema23_driver_fault(void) {
+    if (gpio_get(23))
+        return false;
+    if (!state.ignore_overcurrent_shutdown || !gpio_get(6) || !gpio_get(0))
+        return true;
+    return !driver_faults_acceptable();
+}
 static bool verify_driver(void) {
     const uint8_t regs[] = {0x04, 0x05, 0x06, 0x07, 0x0c, 0x0e, 0x10};
-    const uint8_t values[] = {0x8f, 0x06, 0x38, 0x4d, 0x10, expected_current, 0x10};
+    const uint8_t values[] = {0x8f, 0x06, control3(), 0x4d, 0x10, expected_current, 0x10};
     for (unsigned i = 0; i < sizeof(regs); ++i) {
         uint8_t v;
         if (!spi_read(regs[i], &v) || v != values[i])
             return false;
     }
-    uint8_t faults;
-    return spi_read(0, &faults) && !faults && gpio_get(23);
+    return driver_faults_acceptable();
 }
 const char *nema23_prepare_motion(void) {
     if (!nema23_ready())
@@ -103,23 +125,23 @@ const char *nema23_prepare_motion(void) {
     if (clear_on_arm) {
         /* Clear power-up/previous latched diagnostics only on an explicit arm,
            never as part of an ordinary motion start. CLR_FLT self-clears. */
-        uint8_t tx[2] = {0x06, 0xb8}, rx[2], actual;
+        uint8_t tx[2] = {0x06, (uint8_t)(control3() | 0x80)}, rx[2], actual;
         gpio_put(17, 0);
         int n = spi_write_read_blocking(spi0, tx, rx, 2);
         gpio_put(17, 1);
         sleep_us(1);
-        if (n != 2 || (rx[0] & 0xc0) != 0xc0 || !spi_read(0x06, &actual) || actual != 0x38) {
+        if (n != 2 || (rx[0] & 0xc0) != 0xc0 || !spi_read(0x06, &actual) || actual != control3()) {
             latch("DRV8452 explicit fault clear failed");
             return state.fault;
         }
         clear_on_arm = false;
     }
     /* SPI mode 1. External VREF divider, fixed 1/16 rising-edge STEP,
-       smart-tune ripple decay, latched OCP/OTSD, no automatic interpolation,
+       smart-tune ripple decay, optional OCP auto-retry and latched OTSD, no automatic interpolation,
        torque automation or untuned sensorless stall detection. */
-    expected_current = nema23_current_code(state.current_peak_a * (state.folded_back ? 0.5 : 1));
+    expected_current = nema23_current_code(nema23_effective_current());
     const uint8_t regs[] = {0x06, 0x04, 0x05, 0x07, 0x0c, 0x0d, 0x0e, 0x0f, 0x10};
-    const uint8_t values[] = {0x38, 0x0f, 0x06, 0x4d, 0x10, 0x00, expected_current, 0x20, 0x10};
+    const uint8_t values[] = {control3(), 0x0f, 0x06, 0x4d, 0x10, 0x00, expected_current, 0x20, 0x10};
     for (unsigned i = 0; i < sizeof(regs); ++i) {
         if (!spi_write_verify(regs[i], values[i])) {
             latch("DRV8452 SPI configuration failed");
@@ -175,6 +197,14 @@ void nema23_set_pg_override(bool enabled) {
 void nema23_set_fuse_fault_override(bool enabled) {
     nema23_disarm();
     state.ignore_fuse_power_fault = enabled;
+}
+void nema23_set_overcurrent_override(bool enabled) {
+    nema23_disarm();
+    state.ignore_overcurrent_shutdown = enabled;
+}
+void nema23_set_winding_limit_override(bool enabled) {
+    nema23_disarm();
+    state.ignore_winding_current_limit = enabled;
 }
 void nema23_disarm(void) {
     isolate();
@@ -277,7 +307,7 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
             latch("PD power loss or eFuse fault");
             return;
         }
-        if (state.phase == POWER_READY && (!gpio_get(24) || !gpio_get(23))) {
+        if (state.phase == POWER_READY && (!gpio_get(24) || nema23_driver_fault())) {
             latch("Driver or hardware interlock fault");
             return;
         }
@@ -303,7 +333,7 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
     if (state.phase == POWER_READY && gpio_get(6)) {
         if (temperature >= 60 && !state.folded_back) {
             state.folded_back = true;
-            expected_current = nema23_current_code(state.current_peak_a * 0.5);
+            expected_current = nema23_current_code(nema23_effective_current());
             if (!spi_write_verify(0x0e, expected_current)) {
                 latch("Thermal current foldback failed");
                 return;

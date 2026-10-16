@@ -110,7 +110,78 @@ static void arm(void) {
     assert(nema23_ready() && !fake_pins[22] && !fake_pins[6]);
     assert(spi_regs[5] == 6 && spi_regs[4] == 0x8f && spi_regs[0x10] == 0x10);
 }
+static void test_current_overrides(void) {
+    setup();
+    assert(!nema23_status().ignore_overcurrent_shutdown && !nema23_status().ignore_winding_current_limit);
+    check("{\"cmd\":\"set_overcurrent_shutdown_override\",\"enabled\":1}", false);
+    check("{\"cmd\":\"set_winding_current_limit_override\"}", false);
+    fake_motor.mode = CONTINUOUS;
+    fake_motor.enabled = true;
+    check("{\"cmd\":\"set_overcurrent_shutdown_override\",\"enabled\":true}", false);
+    check("{\"cmd\":\"set_winding_current_limit_override\",\"enabled\":true}", false);
+    fake_motor.mode = STOPPED;
+    fake_motor.enabled = false;
+    check("{\"cmd\":\"set_winding_current_limit_override\",\"enabled\":true}", true);
+    assert(!nema23_status().ignore_overcurrent_shutdown && nema23_status().ignore_winding_current_limit);
+    assert(!fake_pins[0] && !fake_pins[22]);
+    request20();
+    arm();
+    assert(spi_regs[0x06] == 0x38 && spi_regs[0x0e] == 255);
+    assert(nema23_status().current_peak_a == 1 && nema23_effective_current() == NEMA23_FULL_SCALE_A);
+    assert(!nema23_prepare_motion());
+    nema23_poll(fake_us, true, 60);
+    assert(nema23_status().folded_back && spi_regs[0x0e] == nema23_current_code(NEMA23_FULL_SCALE_A / 2));
+    nema23_poll(fake_us, true, 70);
+    assert(!nema23_ready() && !fake_pins[0]);
+    check("{\"cmd\":\"set_overcurrent_shutdown_override\",\"enabled\":true}", true);
+    assert(nema23_status().ignore_winding_current_limit && nema23_status().ignore_overcurrent_shutdown);
+    check("{\"cmd\":\"set_winding_current_limit_override\",\"enabled\":false}", true);
+    assert(!nema23_status().ignore_winding_current_limit && nema23_status().ignore_overcurrent_shutdown);
+    request20();
+    arm();
+    assert(spi_regs[0x06] == 0x3c && spi_regs[0x0e] == nema23_current_code(1));
+    assert(!nema23_prepare_motion());
+    spi_regs[0] = 0x88;
+    fake_pins[23] = 0;
+    assert(!driver_fault());
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_ready());
+    output_length = 0;
+    status(false);
+    cJSON *o = cJSON_Parse(output);
+    assert(o && cJSON_IsTrue(cJSON_GetObjectItem(o, "driver_fault_asserted")));
+    assert(cJSON_IsTrue(cJSON_GetObjectItem(o, "driver_overcurrent_reported")));
+    assert(cJSON_IsTrue(cJSON_GetObjectItem(o, "overcurrent_shutdown_override")));
+    assert(cJSON_IsFalse(cJSON_GetObjectItem(o, "winding_current_limit_override")));
+    cJSON_Delete(o);
+    spi_regs[0] = 0x8a; /* OCP plus thermal fault must still shut down. */
+    assert(driver_fault());
+    nema23_poll(fake_us, true, 25);
+    assert(!nema23_ready() && !fake_pins[0]);
+    for (int broken = 0; broken < 2; ++broken) {
+        setup();
+        nema23_set_overcurrent_override(true);
+        request20();
+        arm();
+        assert(!nema23_prepare_motion());
+        fake_pins[23] = 0;
+        spi_regs[0] = broken ? 0x88 : 0; /* Unknown nFAULT or unreadable SPI. */
+        spi_broken = broken;
+        assert(driver_fault());
+        nema23_poll(fake_us, true, 25);
+        assert(!nema23_ready());
+    }
+    setup();
+    nema23_set_overcurrent_override(true);
+    nema23_set_overcurrent_override(false);
+    request20();
+    arm();
+    assert(spi_regs[0x06] == 0x38 && spi_regs[0x0e] == nema23_current_code(1));
+    setup();
+    assert(!nema23_status().ignore_overcurrent_shutdown && !nema23_status().ignore_winding_current_limit);
+}
 int main(void) {
+    test_current_overrides();
     setup();
     nema23_set_pg_override(true);
     pd_status = pd_current = 0;
