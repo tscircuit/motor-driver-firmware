@@ -41,3 +41,6 @@ assert.doesNotMatch(view.panel.children[3].textContent,/Stall-like/);
 assert.match(view.panel.children[1].textContent,/24 recordings/);
 view.receive({...active,current_stall_state:'free',current_stall_score:10},1100);view.draw(1100);
 assert.match(view.panel.children[3].textContent,/Free-running-like/);
+
+view.receive({...active,current_stall_model_scope:'shared-default'},1200);
+assert.match(view.panel.children[1].textContent,/Shared default model/);

@@ -38,7 +38,7 @@ int main(void) {
     assert(stall_estimator_classify(outlier,60,9,40).outlier);
     outlier[1]=NAN; assert(!stall_estimator_classify(outlier,60,9,40).valid);
 
-    stall_estimator_init(true);
+    stall_estimator_init();
     stall_context_t c={.moving=true,.healthy=true,.voltage=9,.direction=1,.factor=2,.speed=120,.profile_speed=120,.temperature=40};
     stall_estimator_context(c,now);uint64_t start=now,first=feed(free60,500);
     assert(first && first-start<200000); /* No fixed one-second startup delay. */
@@ -50,9 +50,9 @@ int main(void) {
     feed(free60,500);assert(stall_estimator_result().valid);
     c.healthy=false;stall_estimator_context(c,now);assert(!stall_estimator_result().valid);
     c.healthy=true;c.moving=false;stall_estimator_context(c,now);assert(!stall_estimator_result().valid);
-    stall_estimator_init(false);c.moving=true;stall_estimator_context(c,now);feed(free60,500);assert(!stall_estimator_result().valid);
+    stall_estimator_init();c.moving=true;stall_estimator_context(c,now);feed(free60,500);assert(stall_estimator_result().valid);
 
-    stall_estimator_init(true);stall_estimator_context(c,now);
+    stall_estimator_init();stall_estimator_context(c,now);
     for(unsigned i=0;i<150000;i++) {
         float phase=6.2831853f*15*i/100000;
         stall_estimator_sample((uint16_t)(2048+1000*sinf(phase)),(uint16_t)(2048+1000*cosf(phase)),now);now+=10;

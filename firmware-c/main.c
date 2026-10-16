@@ -533,6 +533,7 @@ static void status(bool compact) {
     add_bool(o,"current_stall_valid",estimate.valid);
     add_string(o,"current_stall_state",estimate.valid?estimate.state:"unknown");
     add_string(o,"current_stall_model",stall_estimator_model_id());
+    add_string(o,"current_stall_model_scope","shared-default");
     add_number(o,"current_stall_window_end_us",(double)estimate.window_end_us);
     add_number(o,"current_stall_analysis_lag_ms",estimate.computed_at_us>=estimate.window_end_us?(estimate.computed_at_us-estimate.window_end_us)/1000.0:0);
     if(estimate.valid)add_number(o,"current_stall_score",estimate.score);else null(o,"current_stall_score");
@@ -554,7 +555,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.16");
+        add_string(o, "firmware_version", "1.0.17");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -731,8 +732,8 @@ static const char *homing_start(cJSON *c) {
        backoff<20 || backoff>1000 || floor(backoff)!=backoff || travel<=4*backoff ||
        travel/speed>120) return "Use 25-100 full steps/sec, 20+ backoff steps, and a search within 120 seconds";
 #ifndef MOTOR_BOARD_DRV8452
-    if(strcmp(device_id,"e66568714f117e21") || pd_voltage!=9 ||
-       (speed!=25 && speed!=60 && speed!=100)) return "This NEMA17 requires its calibrated motor at 9 V and 25, 60 or 100 full steps/sec";
+    if(pd_voltage!=9 ||
+       (speed!=25 && speed!=60 && speed!=100)) return "Shared NEMA17 homing uses 9 V and 25, 60 or 100 full steps/sec";
 #endif
     if(backoff < ceil(speed*(.4+(speed==25?.4:.1))+5)) return "Increase backoff to allow steady-speed stall clearance";
     sample();
@@ -1270,7 +1271,7 @@ int main(void) {
     gpio_set_function(BUZZER_PIN, GPIO_FUNC_PWM);
     tusb_init();
 #if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
-    stall_estimator_init(strcmp(device_id,"e66568714f117e21")==0);
+    stall_estimator_init();
 #endif
     watchdog_enable(2000, true);
     char line[513];

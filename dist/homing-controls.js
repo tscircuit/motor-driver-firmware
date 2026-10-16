@@ -39,7 +39,7 @@ function mount(axes,jog,report,parent){
  const doc=root.document,runner=new HomingRunner(axes,jog,report);
  const el=(tag,text)=>{const e=doc.createElement(tag);if(text)e.textContent=text;return e;};
  const panel=el('section');panel.className='jogPanel';panel.append(el('h2','Stall-based homing'));
- const note=el('p','Finds both physical end stops, backs away, saves the usable range, and returns to zero. Use only an axis with hard stops that tolerate brief contact. Bounds use commanded steps, not shaft feedback. Rehome after a restart or any manual shaft movement.');
+ const note=el('p','Uses the shared default stall model; no per-controller stall calibration is required. Finds both physical end stops, backs away, saves the usable range, and returns to zero. Use only an axis with hard stops that tolerate brief contact. Bounds use commanded steps, not shaft feedback. Rehome after a restart or any manual shaft movement.');
  const makeInput=(label,value,min,max)=>{const l=el('label',label+' '),i=el('input');i.type='number';i.value=String(value);i.min=String(min);i.max=String(max);l.append(i);panel.append(l);return i;};
  panel.append(note);
  const speed=makeInput('Homing speed (full steps/sec)',60,25,100),travel=makeInput('Maximum search per end (full steps)',1000,100,100000),backoff=makeInput('Backoff from each stop (full steps)',100,20,1000);
