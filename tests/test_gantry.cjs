@@ -22,5 +22,6 @@ const moves=()=>calls.filter(c=>c[1]==='jog');
  ({j,axes}=setup());j.press('ArrowRight');await j.tick(150,{});axes.X.last.temperature_c=65;axes.X.last.alarm_active=true;await j.tick(150,{});assert.equal(j.held.has('ArrowRight'),true);assert.equal(j.active,'X');
  axes.X.last.temperature_c=75;await j.tick(150,{});assert.equal(j.active,null);
  ({j,axes}=setup());axes.X.last.temperature_c=65;assert.equal(j.press('ArrowRight'),false);assert.equal(j.press('ArrowUp'),true);
+ ({j,axes}=setup());axes.X.last.capabilities.fault_stop_mode_supported=true;axes.X.last.stop_on_detected_fault=false;axes.X.last.driver_fault_asserted=true;assert.equal(j.press('ArrowRight'),true);await j.tick(150,{});assert.equal(j.active,'X');axes.X.last.stop_on_detected_fault=true;await j.tick(150,{});assert.equal(j.active,null);
  console.log('PASS simultaneous axes, opposite cancellation, live full/half and speed changes, resume/reverse while braking, independent USB queues, release races, no speed ceiling, stops/faults');
 })().catch(e=>{console.error(e);process.exitCode=1;});

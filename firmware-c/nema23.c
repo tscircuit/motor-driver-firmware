@@ -11,6 +11,10 @@ static nema23_status_t state;
 static uint64_t deadline, last_contract, last_spi, isolated_at;
 static bool clear_on_arm;
 static uint8_t expected_current;
+static bool motion_active, stall_enabled;
+static uint32_t motion_pulses, stall_enable_pulses;
+static uint64_t last_stall_sample, low_torque_since;
+static uint8_t control4(void) { return stall_enabled ? 0x55 : 0x45; }
 static bool pg_missing(void) { return !state.ignore_pd_power_good && gpio_get(1); }
 static bool fuse_fault(void) { return !state.ignore_fuse_power_fault && !gpio_get(2); }
 static void isolate(void) {
@@ -21,7 +25,7 @@ static void isolate(void) {
     isolated_at = time_us_64();
 }
 static bool spi_read(uint8_t reg, uint8_t *value);
-static void latch(const char *reason) {
+static void capture_fault(void) {
     /* Preserve the triggering inputs before isolate changes the rail and driver. */
     state.fault_gpio = 0;
     const uint8_t pins[] = {0, 1, 2, 6, 22, 23, 24};
@@ -30,6 +34,9 @@ static void latch(const char *reason) {
     state.fault_snapshot_valid = true;
     state.fault_driver_register_valid = gpio_get(0) && gpio_get(6) &&
         spi_read(0, &state.fault_driver_register);
+}
+static void latch(const char *reason) {
+    capture_fault();
     isolate();
     gpio_put(8, 0);
     state.phase = POWER_LATCHED;
@@ -92,7 +99,9 @@ uint8_t nema23_current_code(double peak_a) {
         steps = 256;
     return (uint8_t)(steps - 1);
 }
-static uint8_t control3(void) { return state.ignore_overcurrent_shutdown ? 0x3c : 0x38; }
+static uint8_t control3(void) {
+    return (!state.stop_on_fault || state.ignore_overcurrent_shutdown) ? 0x3c : 0x38;
+}
 double nema23_effective_current(void) {
     double peak = state.ignore_winding_current_limit ? NEMA23_FULL_SCALE_A : state.current_peak_a;
     return peak * (state.folded_back ? 0.5 : 1);
@@ -102,6 +111,8 @@ static bool driver_faults_acceptable(void) {
     if (!spi_read(0, &faults))
         return false;
     state.driver_faults = faults;
+    if (!state.stop_on_fault)
+        return true; /* Reporting mode never converts a driver report into a software stop. */
     /* Only OCP (bit 3) and its FAULT summary (bit 7) may be ignored.
        A bare low nFAULT, unreadable SPI, or any other fault still blocks. */
     if (state.ignore_overcurrent_shutdown && (faults & 0x08) && !(faults & ~0x88))
@@ -109,6 +120,7 @@ static bool driver_faults_acceptable(void) {
     return !faults && gpio_get(23);
 }
 bool nema23_driver_fault(void) {
+    if (!state.stop_on_fault) return false;
     if (gpio_get(23))
         return false;
     if (!state.ignore_overcurrent_shutdown || !gpio_get(6) || !gpio_get(0))
@@ -116,8 +128,8 @@ bool nema23_driver_fault(void) {
     return !driver_faults_acceptable();
 }
 static bool verify_driver(void) {
-    const uint8_t regs[] = {0x04, 0x05, 0x06, 0x07, 0x0c, 0x0e, 0x10};
-    const uint8_t values[] = {0x8f, 0x06, control3(), 0x4d, 0x10, expected_current, 0x10};
+    const uint8_t regs[] = {0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0c, 0x0e, 0x10};
+    const uint8_t values[] = {0x8f, 0x06, control3(), control4(), 0x00, 0x20, 0x10, expected_current, 0x10};
     for (unsigned i = 0; i < sizeof(regs); ++i) {
         uint8_t v;
         if (!spi_read(regs[i], &v) || v != values[i])
@@ -128,6 +140,9 @@ static bool verify_driver(void) {
 const char *nema23_prepare_motion(void) {
     if (!nema23_ready())
         return "Motor power is not armed";
+    stall_enabled = false;
+    state.stall_valid = state.stall_suspected = false;
+    low_torque_since = last_stall_sample = 0;
     gpio_put(22, 0);
     gpio_put(6, 1);
     sleep_us(1500);
@@ -147,10 +162,10 @@ const char *nema23_prepare_motion(void) {
     }
     /* SPI mode 1. External VREF divider, fixed 1/16 rising-edge STEP,
        smart-tune ripple decay, optional OCP auto-retry and latched OTSD, no automatic interpolation,
-       torque automation or untuned sensorless stall detection. */
+       torque automation. Stall monitoring is enabled only after motion warmup. */
     expected_current = nema23_current_code(nema23_effective_current());
-    const uint8_t regs[] = {0x06, 0x04, 0x05, 0x07, 0x0c, 0x0d, 0x0e, 0x0f, 0x10};
-    const uint8_t values[] = {control3(), 0x0f, 0x06, 0x4d, 0x10, 0x00, expected_current, 0x20, 0x10};
+    const uint8_t regs[] = {0x06, 0x04, 0x05, 0x07, 0x08, 0x09, 0x0c, 0x0d, 0x0e, 0x0f, 0x10};
+    const uint8_t values[] = {control3(), 0x0f, 0x06, control4(), 0x00, 0x20, 0x10, 0x00, expected_current, 0x20, 0x10};
     for (unsigned i = 0; i < sizeof(regs); ++i) {
         if (!spi_write_verify(regs[i], values[i])) {
             latch("DRV8452 SPI configuration failed");
@@ -170,7 +185,11 @@ void nema23_init(void) {
     state = (nema23_status_t){.phase = POWER_OFF,
                               .requested_voltage = 5,
                               .current_peak_a = 1.0,
+                              .stall_threshold = 3,
                               .ignore_pd_power_good = true};
+    motion_active = stall_enabled = false;
+    motion_pulses = stall_enable_pulses = 0;
+    low_torque_since = last_stall_sample = 0;
     last_contract = last_spi = 0;
     isolate();
     gpio_put(8, 0);
@@ -199,6 +218,68 @@ const char *nema23_request_voltage(int volts) {
     deadline = time_us_64() + NEMA23_DISCHARGE_US;
     return NULL;
 }
+void nema23_set_fault_stop(bool enabled) {
+    nema23_disarm();
+    state.stop_on_fault = enabled;
+}
+const char *nema23_set_stall_threshold(unsigned threshold) {
+    if (threshold < 1 || threshold > 4095) return "Stall threshold must be 1-4095";
+    state.stall_threshold = threshold;
+    low_torque_since = 0;
+    state.stall_suspected = false;
+    return NULL;
+}
+void nema23_observe_motion(bool active, uint32_t pulses) {
+    if (active && !motion_active && stall_enabled)
+        stall_enable_pulses = pulses;
+    motion_active = active;
+    motion_pulses = pulses;
+    if (!active) {
+        state.stall_valid = state.stall_suspected = false;
+        low_torque_since = 0;
+    }
+}
+static void sample_stall(uint64_t now) {
+    state.stall_valid = false;
+    if (!motion_active || !gpio_get(22) || !gpio_get(24)) {
+        state.stall_suspected = false;
+        low_torque_since = 0;
+        return;
+    }
+    /* Four electrical half-cycles (128 physical pulses) before enabling,
+       then another four before using TRQ_COUNT. Never classify startup or a
+       power/driver fault as a stall. Hardware comparator threshold stays zero;
+       the software threshold is observational unless stop_on_fault is selected. */
+    if (!stall_enabled) {
+        if (motion_pulses < 128) return;
+        stall_enabled = true;
+        if (!spi_write_verify(0x07, control4())) {
+            latch("Stall monitor SPI configuration failed");
+            return;
+        }
+        stall_enable_pulses = motion_pulses;
+        return;
+    }
+    if (motion_pulses - stall_enable_pulses < 128) return;
+    uint8_t faults, lo, hi, hi_after;
+    if (!spi_read(0, &faults) || !spi_read(0x0b, &hi) || !spi_read(0x0a, &lo) ||
+        !spi_read(0x0b, &hi_after) || hi != hi_after || (faults & ~0x84)) {
+        state.stall_suspected = false;
+        low_torque_since = 0;
+        return;
+    }
+    state.stall_torque_count = ((hi & 15) << 8) | lo;
+    state.stall_valid = true;
+    if (state.stall_torque_count < state.stall_threshold) {
+        if (!low_torque_since) low_torque_since = now;
+        state.stall_suspected = now - low_torque_since >= 200000;
+    } else {
+        low_torque_since = 0;
+        state.stall_suspected = false;
+    }
+    if (state.stall_suspected && state.stop_on_fault)
+        latch("Suspected motor stall (low torque count)");
+}
 void nema23_set_pg_override(bool enabled) {
     nema23_disarm();
     state.ignore_pd_power_good = enabled;
@@ -216,6 +297,8 @@ void nema23_set_winding_limit_override(bool enabled) {
     state.ignore_winding_current_limit = enabled;
 }
 void nema23_disarm(void) {
+    state.warning = state.fault = NULL;
+    state.stall_valid = state.stall_suspected = false;
     isolate();
     gpio_put(8, 0);
     state.phase = POWER_OFF;
@@ -252,8 +335,8 @@ const char *nema23_arm(bool valid, double temperature) {
     return NULL;
 }
 bool nema23_ready(void) {
-    return state.phase == POWER_READY && !pg_missing() && !fuse_fault() &&
-           gpio_get(24);
+    return state.phase == POWER_READY &&
+           (!state.stop_on_fault || (!pg_missing() && !fuse_fault() && gpio_get(24)));
 }
 nema23_status_t nema23_status(void) { return state; }
 const char *nema23_phase_name(void) {
@@ -312,17 +395,18 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
             latch(valid ? "70 C thermal shutdown" : "Temperature sensor unavailable");
             return;
         }
-        if (pg_missing() || (state.phase == POWER_READY && fuse_fault())) {
-            latch("PD power loss or eFuse fault");
-            return;
-        }
-        if (state.phase == POWER_READY && !gpio_get(24)) {
-            latch("Protected rail / temperature interlock dropped (GPIO24)");
-            return;
-        }
-        if (state.phase == POWER_READY && nema23_driver_fault()) {
-            latch("DRV8452 nFAULT asserted (GPIO23)");
-            return;
+        if (state.phase == POWER_READY) {
+            const char *warning = pg_missing() ? "PD power-good missing" :
+                !gpio_get(24) ? "Hardware power/temperature interlock active; shaft motion unverified" :
+                fuse_fault() ? "eFuse fault reported" :
+                !gpio_get(23) ? "DRV8452 fault reported" : NULL;
+            if (warning && warning != state.warning) capture_fault();
+            state.warning = warning;
+            if (warning && state.stop_on_fault &&
+                (!gpio_get(24) || pg_missing() || fuse_fault() || nema23_driver_fault())) {
+                latch(warning);
+                return;
+            }
         }
         if (now - last_contract >= 100000) {
             last_contract = now;
@@ -344,6 +428,11 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
                                : "Protected rail failed power-good check");
     }
     if (state.phase == POWER_READY && gpio_get(6)) {
+        if (now - last_stall_sample >= 20000) {
+            last_stall_sample = now;
+            sample_stall(now);
+            if (state.phase == POWER_LATCHED) return;
+        }
         if (temperature >= 60 && !state.folded_back) {
             state.folded_back = true;
             expected_current = nema23_current_code(nema23_effective_current());

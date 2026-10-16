@@ -115,7 +115,7 @@ function updateCapabilities(){
   $('shutdown').textContent=`${c.shutdown_c}°C · fixed`;
   $('buzzerFrequency').textContent=`${c.buzzer_hz} Hz`;
   $('stepNote').textContent=c.step_note||'Only step sizes supported by the connected board are listed.';
-  $('protectionHint').textContent=`The buzzer setting does not change thermal protection. Motion stops at ${c.shutdown_c}°C, on sensor or driver faults, or after ${c.heartbeat_timeout_ms/1000} seconds without a browser heartbeat.`;
+  $('protectionHint').textContent=c.fault_stop_mode_supported?`Stall and electrical faults are reported by default; stopping on detection is optional. Thermal shutdown at ${c.shutdown_c}°C, sensor checks and heartbeat timeout remain active.`:`The buzzer setting does not change thermal protection. Motion stops at ${c.shutdown_c}°C, on sensor or driver faults, or after ${c.heartbeat_timeout_ms/1000} seconds without a browser heartbeat.`;
   capabilityKey=key;updateEstimate();
  }
 }
