@@ -25,7 +25,7 @@
 #endif
 #if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
 #include "stall_estimator.h"
-static bool current_stream_enabled=true;
+static bool current_stream_enabled=false;
 #endif
 #include "motor.h"
 #include "settings.h"
