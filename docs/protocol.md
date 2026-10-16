@@ -108,3 +108,24 @@ The DRV8825/RGB native application retains protocol 3 and all dashboard commands
 `test_pulses` accepts integer `pulses` from 1 to 100000 and finite `pulse_hz` from 1 to 200000 while stopped. It keeps the motor driver disabled, outputs STEP pulses only, and applies ordinary heartbeat, USB, driver and temperature protections. Completion reports `pulse_test_pulses` and `pulse_test_elapsed_us`. Tests do not advance the commanded motor position.
 
 `bootloader` stops the driver and enters the UF2 bootloader. Setting CDC baud to 1200 also requests BOOTSEL. See [native build/install/safety guide](../firmware-c/README.md).
+
+## Stall response (native firmware 1.0.14+)
+
+Controllers advertising `stall_response_supported` accept
+`{"cmd":"set_stall_response","beeping_on":true,"stop_ms":0}` while stopped.
+Both fields are required. `stop_ms` is an integer from 0 to 60000; zero
+disables auto-stop. Settings persist across restart; defaults are beeping on
+and auto-stop off. Existing names and temperature settings are migrated.
+
+Telemetry reports `stall_beeping_on`, `stall_stop_ms`, `stall_active` and
+`stall_elapsed_ms`. NEMA17 uses the calibrated firmware estimator's definite
+`suspected` state; unknown, uncertain and stale results clear the timer.
+NEMA23 uses valid sensorless torque stall detection. Only enabled finite or
+continuous motion counts. A continuous detection lasting the configured time
+stops with `Stall auto-stop timeout`; it does not restart automatically.
+
+Stall audio is three 70 ms chirps at 1800 Hz, spaced 70 ms apart, repeating
+every 700 ms. Overheat keeps its 2731 Hz alarm and takes priority. These
+settings do not change thermal, electrical or communication protection.
+The NEMA17 estimator remains experimental; a configured timeout follows
+its detections, not independent shaft feedback.
