@@ -105,6 +105,7 @@ void current_capture_analyze(void) {
     uint64_t n=pairs_written();
     if(!stall_estimator_active()){analysis_cursor=n;return;}
     if(n-analysis_cursor>RING_WORDS/2-512){stall_estimator_gap(n-analysis_cursor);analysis_cursor=n;return;}
-    while(analysis_cursor<n){unsigned i=(analysis_cursor*2)&(RING_WORDS-1);stall_estimator_sample(ring[i],ring[i+1],started_us+analysis_cursor*10);analysis_cursor++;}
+    uint64_t end=analysis_cursor+200;if(end>n)end=n;
+    while(analysis_cursor<end){unsigned i=(analysis_cursor*2)&(RING_WORDS-1);stall_estimator_sample(ring[i],ring[i+1],started_us+analysis_cursor*10);analysis_cursor++;}
 }
 #endif

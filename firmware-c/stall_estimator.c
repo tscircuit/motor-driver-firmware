@@ -44,16 +44,20 @@ void stall_estimator_sample(uint16_t a,uint16_t b,uint64_t at){
  }
 }
 typedef struct {
- const float (*samples)[4];unsigned n,pos;float ma,mb,sr,sr2,sp,sp2;
+ const float (*samples)[4];unsigned n,pos;bool centered;float ma,mb,sr,sr2,sp,sp2;
  float re[3][2],im[3][2],cs[3],sn[3],dc[3],ds[3];
 } feature_job_t;
 static feature_job_t job;
 static void feature_start(feature_job_t *j,const float (*samples)[4],unsigned n,float speed){
  memset(j,0,sizeof(*j));j->samples=samples;j->n=n;
- for(unsigned i=0;i<n;i++){j->ma+=samples[i][0];j->mb+=samples[i][1];}j->ma/=n;j->mb/=n;
  for(unsigned h=0;h<3;h++){float angle=6.28318530718f*speed/4*(2*h+1)/1000;j->cs[h]=1;j->dc[h]=cosf(angle);j->ds[h]=sinf(angle);}
 }
 static void feature_step(feature_job_t *j,unsigned limit){
+ if(!j->centered){
+  unsigned end=j->pos+limit;if(end>j->n)end=j->n;
+  for(;j->pos<end;j->pos++){j->ma+=j->samples[j->pos][0];j->mb+=j->samples[j->pos][1];}
+  if(j->pos==j->n){j->ma/=j->n;j->mb/=j->n;j->centered=true;j->pos=0;}return;
+ }
  unsigned end=j->pos+limit;if(end>j->n)end=j->n;
  for(;j->pos<end;j->pos++){
   const float *s=j->samples[j->pos];float a=s[0]-j->ma,b=s[1]-j->mb,r=sqrtf(a*a+b*b),p=s[2];j->sr+=r;j->sr2+=r*r;j->sp+=p;j->sp2+=p*p;
@@ -68,7 +72,7 @@ static bool feature_finish(feature_job_t *j,float f[7]){
 }
 bool stall_estimator_features(const float (*samples)[4],unsigned n,float speed,float f[7]){
  if(n<100||!isfinite(speed)||speed<=0)return false;
- feature_job_t local;feature_start(&local,samples,n,speed);feature_step(&local,n);return feature_finish(&local,f);
+ feature_job_t local;feature_start(&local,samples,n,speed);feature_step(&local,n);feature_step(&local,n);return feature_finish(&local,f);
 }
 float stall_estimator_score(const float f[7],bool extrapolate,bool *outlier){
  float a=0,b=0;for(unsigned i=0;i<7;i++){/* Unknown current amplitude is removed when extrapolating. */float v=extrapolate&&i==0?free_model[0]:f[i];a+=(v-free_model[i])*(v-free_model[i])/(scale[i]*scale[i]);b+=(v-stall_model[i])*(v-stall_model[i])/(scale[i]*scale[i]);}
@@ -76,8 +80,8 @@ float stall_estimator_score(const float f[7],bool extrapolate,bool *outlier){
 }
 void stall_estimator_evaluate(uint64_t now){
  if(job_active){
-  feature_step(&job,64);
-  if(job.pos<job.n)return;
+  feature_step(&job,job.centered?8:512);
+  if(!job.centered||job.pos<job.n)return;
   job_active=false;float f[7];
   if(!feature_finish(&job,f)){result.valid=false;result.reason="Insufficient winding current";return;}
   result.score=stall_estimator_score(f,result.extrapolated,&result.outlier);result.extrapolated|=result.outlier;result.coverage=1;result.valid=true;result.reason=result.extrapolated?"Unvalidated extrapolation":"Calibrated operating point";return;

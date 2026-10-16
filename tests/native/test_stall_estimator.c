@@ -4,7 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 static uint64_t now=1000000;
-static void feed(const float s[500][4],unsigned count){for(unsigned i=0;i<count;i++){stall_estimator_bin(s[i%500][0],s[i%500][1],s[i%500][2],s[i%500][3],now);now+=1000;}for(unsigned j=0;j<65;j++)stall_estimator_evaluate(now);}
+static void feed(const float s[500][4],unsigned count){for(unsigned i=0;i<count;i++){stall_estimator_bin(s[i%500][0],s[i%500][1],s[i%500][2],s[i%500][3],now);now+=1000;}for(unsigned j=0;j<2048;j++)stall_estimator_evaluate(now);}
 int main(void){
  float f[7];bool outlier;
  assert(stall_estimator_features(free_samples,500,60,f));
@@ -27,7 +27,7 @@ int main(void){
     samples independently of any USB export. */
  stall_estimator_init(true);stall_estimator_context(c,now);
  for(unsigned i=0;i<150000;i++){float phase=6.2831853f*15*i/100000;uint16_t a=(uint16_t)(2048+1000*sinf(phase)),b=(uint16_t)(2048+1000*cosf(phase));stall_estimator_sample(a,b,now);now+=10;}
- for(unsigned j=0;j<65;j++){stall_estimator_evaluate(now);}
+ for(unsigned j=0;j<2048;j++){stall_estimator_evaluate(now);}
  r=stall_estimator_result();assert(r.analyzed==150000&&r.dropped==0&&r.valid);
  stall_estimator_sample(0,2048,now);assert(!stall_estimator_result().valid&&stall_estimator_result().dropped==1);
  puts("PASS native current estimator: recorded classes, resolution normalization, extrapolation, raw 100 kHz accounting, stopped/fault/data-gap and bandwidth gates");
