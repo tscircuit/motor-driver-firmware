@@ -19,6 +19,8 @@ jobs:
       - run: node tests/test_current_chart.cjs
       - run: node --check dist/board-controls.js
       - run: node tests/test_board_controls.cjs
+      - run: node --check dist/stall-controls.js
+      - run: node tests/test_stall_controls.cjs
       - run: node tests/test_dashboard.cjs
       - run: node tests/test_song.cjs
       - run: node --check dist/gantry.js

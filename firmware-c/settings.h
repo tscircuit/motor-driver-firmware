@@ -5,6 +5,8 @@
 typedef struct {
     char name[33];
     float threshold;
+    uint32_t stall_stop_ms; /* zero disables automatic stopping */
+    bool stall_beep;
 } settings_t;
 extern settings_t settings;
 void settings_load(void);

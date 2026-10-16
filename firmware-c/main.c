@@ -19,6 +19,7 @@
 #include "tusb.h"
 #endif
 #include "board.h"
+#include "stall_response.h"
 #include "current_capture.h"
 #ifdef MOTOR_BOARD_DRV8452
 #include "nema23.h"
@@ -66,12 +67,20 @@ static uint buzzer_pin_function;
 static bool buzzer_saw_low, buzzer_saw_high;
 static uint32_t diagnostic_pulses, diagnostic_elapsed;
 static motor_mode_t previous_mode = STOPPED;
+static stall_response_t stall_response;
 extern volatile bool usb_boot_requested;
 
 static void stop(const char *reason) {
     motor_stop();
+    stall_response = (stall_response_t){0};
     song_length = 0;
     snprintf(stop_reason, sizeof(stop_reason), "%s", reason);
+}
+static void respond_to_stall(uint64_t now, motor_status_t s, bool detected) {
+    stall_response_update(&stall_response, detected && s.enabled &&
+                          (s.mode == FINITE || s.mode == CONTINUOUS), now,
+                          settings.stall_stop_ms);
+    if (stall_response.timed_out) stop("Stall auto-stop timeout");
 }
 static bool power_ready(void) {
 #ifdef MOTOR_BOARD_DRV8847
@@ -156,6 +165,11 @@ static void indicators(uint64_t now, motor_status_t s) {
     if (alarm) {
         song_length = 0;
         buzzer((now / 1000) % 1000 < 180 ? 2731 : 0);
+        return;
+    }
+    if (settings.stall_beep && stall_response.active) {
+        song_length = 0;
+        buzzer(stall_response_tone(&stall_response, true, now));
         return;
     }
     if (song_length && now >= song_until) {
@@ -278,6 +292,11 @@ static void stream_current(void) {
 }
 static cJSON *capabilities(void) {
     cJSON *c = cJSON_CreateObject(), *r = cJSON_CreateObject();
+#ifdef MOTOR_BOARD_DRV8847
+    add_bool(c, "stall_response_supported", false);
+#else
+    add_bool(c, "stall_response_supported", true);
+#endif
 #ifdef MOTOR_BOARD_DRV8452
     add_bool(c, "torque_count_supported", true);
 #else
@@ -384,6 +403,11 @@ static void status(bool compact) {
     else
         null(o, "temperature_c");
     add_bool(o, "motor_enabled", s.enabled);
+    add_bool(o, "stall_beeping_on", settings.stall_beep);
+    add_number(o, "stall_stop_ms", settings.stall_stop_ms);
+    add_bool(o, "stall_active", stall_response.active);
+    add_number(o, "stall_elapsed_ms", stall_response.active ?
+               (time_us_64() - stall_response.since_us) / 1000 : 0);
     add_string(o, "motion_mode", modes[s.mode]);
     if (temperature_valid)
         null(o, "sensor_error");
@@ -485,7 +509,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.13");
+        add_string(o, "firmware_version", "1.0.14");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -878,6 +902,25 @@ static void command(const char *line) {
         else
             led_selection = next;
 #endif
+    } else if (matches(cmd, "set_stall_response")) {
+#ifdef MOTOR_BOARD_DRV8847
+        error = "Stall detection is not supported by this board";
+#else
+        double delay;
+        cJSON *beep = cJSON_GetObjectItemCaseSensitive(c, "beeping_on");
+        if (s.mode != STOPPED || restart_at)
+            error = "Stop motor before saving settings";
+        else if (!cJSON_IsBool(beep) || !number(c, "stop_ms", &delay) ||
+                 delay < 0 || delay > 60000 || floor(delay) != delay)
+            error = "Use beeping_on boolean and stop_ms integer from 0 to 60000 (0 is off)";
+        else {
+            settings_t next = settings;
+            next.stall_beep = cJSON_IsTrue(beep);
+            next.stall_stop_ms = (uint32_t)delay;
+            if (!settings_save(&next)) error = "Settings flash write failed";
+            else stall_response = (stall_response_t){0};
+        }
+#endif
     } else if (matches(cmd, "set_threshold") || matches(cmd, "set_device_name")) {
         if (s.mode != STOPPED || restart_at)
             error = "Stop motor before saving settings";
@@ -1100,6 +1143,19 @@ int main(void) {
         stall_estimator_evaluate(time_us_64());
         stall_estimator_compute_time((uint32_t)(time_us_64()-analysis_started));
 #endif
+        /* Only a current, definite detection counts toward a continuous stall. */
+        bool detected = false;
+#ifdef MOTOR_BOARD_DRV8452
+        nema23_status_t stall_board = nema23_status();
+        detected = stall_board.stall_valid && stall_board.stall_suspected;
+#elif !defined(MOTOR_BOARD_DRV8847)
+        stall_result_t stall_estimate = stall_estimator_result();
+        detected = stall_estimate.valid && strcmp(stall_estimate.state, "suspected") == 0 &&
+                   now >= stall_estimate.window_end_us &&
+                   now - stall_estimate.window_end_us < 250000;
+#endif
+        s = motor_status();
+        respond_to_stall(now, s, detected);
         if (!tud_cdc_connected()) {
             if (!connection_lost_at)
                 connection_lost_at = now;

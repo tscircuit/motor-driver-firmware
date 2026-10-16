@@ -25,6 +25,15 @@ int main(void) {
     memset(fake_flash, 0xff, sizeof(fake_flash));
     reboot();
     assert(settings.threshold == 65);
+    assert(settings.stall_beep && settings.stall_stop_ms == 0);
+    /* Preserve existing names/temperature limits when upgrading old firmware. */
+    legacy_record_t old = {.magic = LEGACY_SETTINGS_MAGIC, .sequence = 12,
+                          .value = {.name = "Existing motor", .threshold = 63}};
+    old.checksum = checksum_bytes(&old, offsetof(legacy_record_t, checksum));
+    memcpy(fake_flash, &old, sizeof(old));
+    reboot();
+    assert(strcmp(settings.name, "Existing motor") == 0 && settings.threshold == 63);
+    assert(settings.stall_beep && settings.stall_stop_ms == 0);
     settings_t first = {.name = "Gantry YY", .threshold = 64};
     assert(settings_save(&first));
     reboot();
@@ -45,6 +54,14 @@ int main(void) {
     assert(settings_save(&second));
     reboot();
     assert(settings.threshold == 66);
+    second.stall_beep = true;
+    second.stall_stop_ms = 1250;
+    assert(settings_save(&second));
+    reboot();
+    assert(settings.stall_beep && settings.stall_stop_ms == 1250);
+    second.stall_stop_ms = 60001;
+    assert(!settings_save(&second));
+    second.stall_stop_ms = 0;
     const char *invalid[] = {
         "", " leading", "trailing ", "123456789012345678901234567890123", "bad\nname", "bad\x7f"};
     for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i)

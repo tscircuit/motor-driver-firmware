@@ -33,3 +33,6 @@ build/native-tests/test-drv8847-motor
 
 "$compiler" -std=c11 -Wall -Wextra -Werror -fsanitize="$sanitize" -Ifirmware-c tests/native/test_stall_estimator.c firmware-c/stall_estimator.c -lm -o build/native-tests/test-stall-estimator
 build/native-tests/test-stall-estimator
+"$compiler" -std=c11 -Wall -Wextra -Werror -fsanitize="$sanitize" -Ifirmware-c \
+  tests/native/test_stall_response.c -o build/native-tests/test-stall-response
+build/native-tests/test-stall-response

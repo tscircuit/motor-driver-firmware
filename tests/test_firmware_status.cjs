@@ -1,12 +1,12 @@
 const assert=require('node:assert/strict');
 const {classify}=require('../dist/firmware-status.js');
-for(const version of ['1.0.0','1.0.1','1.0.2','1.0.3','1.0.4','1.0.5','1.0.6','1.0.7','1.0.8','1.0.9','1.0.10','1.0.11','1.0.12',undefined,'bad','1.0.13-dev'])assert.equal(classify({firmware:'native-c-pio',firmware_version:version}).upgrade,true);
-for(const version of ['1.0.13','1.0.14','1.0.130','2.0.0'])assert.equal(classify({firmware:'native-c-pio',firmware_version:version}).upgrade,false);
-assert.equal(classify({firmware_version:'1.0.13',firmware:'micropython'}).upgrade,true);
+for(const version of ['1.0.0','1.0.1','1.0.2','1.0.3','1.0.4','1.0.5','1.0.6','1.0.7','1.0.8','1.0.9','1.0.10','1.0.11','1.0.12','1.0.13',undefined,'bad','1.0.14-dev'])assert.equal(classify({firmware:'native-c-pio',firmware_version:version}).upgrade,true);
+for(const version of ['1.0.14','1.0.15','1.0.130','2.0.0'])assert.equal(classify({firmware:'native-c-pio',firmware_version:version}).upgrade,false);
+assert.equal(classify({firmware_version:'1.0.14',firmware:'micropython'}).upgrade,true);
 const nodes={},created=[];global.window={document:{getElementById:id=>nodes[id],createElement:()=>({style:{},setAttribute(){}})}};delete require.cache[require.resolve('../dist/firmware-status.js')];require('../dist/firmware-status.js');
 for(const axis of ['X','Y'])nodes['connect'+axis]={parentNode:{append:e=>created.push(e)}};
 const api=window.FirmwareStatus;
-api.receive('X',{type:'telemetry',firmware:'native-c-pio',firmware_version:'1.0.0'});api.receive('Y',{type:'telemetry',firmware:'native-c-pio',firmware_version:'1.0.13'});
+api.receive('X',{type:'telemetry',firmware:'native-c-pio',firmware_version:'1.0.0'});api.receive('Y',{type:'telemetry',firmware:'native-c-pio',firmware_version:'1.0.14'});
 assert.match(created[0].textContent,/⚠.*Upgrade needed/);assert.doesNotMatch(created[1].textContent,/⚠/);
-api.receive('Y',{type:'telemetry',compact:true,temperature_c:25});assert.match(created[1].textContent,/1.0.13/);
+api.receive('Y',{type:'telemetry',compact:true,temperature_c:25});assert.match(created[1].textContent,/1.0.14/);
 api.disconnect('X');assert.match(created[0].textContent,/disconnected/);console.log('PASS firmware version comparison, per-controller indicators, compact frames and disconnect');

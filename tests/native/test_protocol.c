@@ -38,6 +38,13 @@ int main(void) {
     assert(cJSON_IsNull(cJSON_GetObjectItem(initial, "stall_suspected")));
     assert(cJSON_IsFalse(cJSON_GetObjectItem(initial, "stall_detection_valid")));
     cJSON_Delete(initial);
+    check("{\"cmd\":\"set_stall_response\",\"beeping_on\":true,\"stop_ms\":1000}", true);
+    assert(settings.stall_beep && settings.stall_stop_ms == 1000);
+    check("{\"cmd\":\"set_stall_response\",\"beeping_on\":1,\"stop_ms\":1000}", false);
+    check("{\"cmd\":\"set_stall_response\",\"beeping_on\":true,\"stop_ms\":-1}", false);
+    check("{\"cmd\":\"set_stall_response\",\"beeping_on\":true,\"stop_ms\":60001}", false);
+    check("{\"cmd\":\"set_stall_response\",\"beeping_on\":true,\"stop_ms\":1.5}", false);
+    check("{\"cmd\":\"set_stall_response\",\"beeping_on\":false,\"stop_ms\":0}", true);
     check("{\"cmd\":\"set_current_stream_enabled\",\"enabled\":false}",true);
     assert(!current_stream_enabled);
     check("{\"cmd\":\"set_current_stream_enabled\",\"enabled\":1}",false);
@@ -60,6 +67,7 @@ int main(void) {
     check(START, false); /* Driver fault. */
     fake_pins[23] = 1;
     check(START, true);
+    check("{\"cmd\":\"set_stall_response\",\"beeping_on\":true,\"stop_ms\":1000}", false);
     output_length = 0;
     status(true);
     cJSON *compact_frame = cJSON_Parse(output);
@@ -75,6 +83,24 @@ int main(void) {
     check("{\"cmd\":\"jog\",\"direction\":1,\"speed_sps\":40}", false);
     check("{\"cmd\":\"stop\"}", true);
     assert(!fake_motor.enabled);
+    settings.stall_beep = true;
+    settings.stall_stop_ms = 1000;
+    check(START, true);
+    respond_to_stall(fake_us, fake_motor, true);
+    indicators(fake_us, fake_motor);
+    assert(buzzer_frequency == 1800);
+    alarm = true;
+    indicators(fake_us / 1000000 * 1000000, fake_motor);
+    assert(buzzer_frequency == 2731); /* Overheat always wins. */
+    alarm = false;
+    fake_us += 999999;
+    respond_to_stall(fake_us, fake_motor, true);
+    assert(fake_motor.enabled);
+    fake_us++;
+    respond_to_stall(fake_us, fake_motor, true);
+    assert(!fake_motor.enabled && matches(stop_reason, "Stall auto-stop timeout"));
+    assert(!stall_response.active);
+    settings.stall_stop_ms = 0;
     const char *invalid[] = {
         "[]",
         "null",
