@@ -405,6 +405,10 @@ static void status(bool compact) {
     add_bool(o, "winding_current_limit_override", board.ignore_winding_current_limit);
     add_number(o, "effective_current_peak_a", nema23_effective_current());
     add_number(o, "driver_fault_register", board.driver_faults);
+    add_bool(o, "fault_snapshot_valid", board.fault_snapshot_valid);
+    add_number(o, "fault_gpio_snapshot", board.fault_gpio);
+    add_bool(o, "fault_driver_register_valid", board.fault_driver_register_valid);
+    add_number(o, "fault_driver_register", board.fault_driver_register);
     add_bool(o, "driver_overcurrent_reported", (board.driver_faults & 0x08) != 0);
     add_bool(o, "pd_contract_valid", board.contract_valid);
     add_number(o, "pd_contract_current_a", board.current_units * 0.05);
@@ -418,7 +422,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.4");
+        add_string(o, "firmware_version", "1.0.5");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
