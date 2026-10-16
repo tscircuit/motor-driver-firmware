@@ -8,7 +8,7 @@
 #endif
 #include <math.h>
 static nema23_status_t state;
-static uint64_t deadline, last_contract, last_spi, isolated_at;
+static uint64_t deadline, last_contract, last_spi;
 static bool clear_on_arm;
 static uint8_t expected_current;
 static bool motion_active, stall_enabled;
@@ -18,12 +18,10 @@ static uint8_t control4(void) { return stall_enabled ? 0x55 : 0x45; }
 static bool pg_missing(void) { return !state.ignore_pd_power_good && gpio_get(1); }
 static bool fuse_fault(void) { return !state.ignore_fuse_power_fault && !gpio_get(2); }
 static void isolate(void) {
-    bool was_powered = gpio_get(0);
     gpio_put(22, 0);
     gpio_put(6, 0);
     gpio_put(0, 0);
     state.spi_valid = false;
-    if (was_powered) isolated_at = time_us_64();
 }
 static bool spi_read(uint8_t reg, uint8_t *value);
 static void capture_fault(void) {
@@ -191,7 +189,7 @@ void nema23_init(void) {
     motion_active = stall_enabled = false;
     motion_pulses = stall_enable_pulses = 0;
     low_torque_since = last_stall_sample = 0;
-    last_contract = last_spi = isolated_at = 0;
+    last_contract = last_spi = 0;
     isolate();
     gpio_put(8, 0);
     i2c_init(i2c0, 100000);
@@ -214,9 +212,8 @@ const char *nema23_request_voltage(int volts) {
     state.requested_voltage = volts;
     state.request_sent = false;
     state.contract_valid = false;
-    state.phase = POWER_DISCHARGE;
+    state.phase = POWER_REQUESTING;
     state.fault = NULL;
-    deadline = time_us_64() + NEMA23_DISCHARGE_US;
     return NULL;
 }
 void nema23_set_fault_stop(bool enabled) {
@@ -310,7 +307,7 @@ const char *nema23_set_current(double peak_a) {
         return "Peak winding current must be 0.1-3.965 A";
     /* Sleep the stopped driver, but retain the unchanged motor supply. The
        next explicit arm verifies the new DAC setting without cycling the rail.
-       Other phases retain their existing voltage/fault/discharge sequence. */
+       Other phases retain their pending voltage request or fault state. */
     if (state.phase == POWER_READY) {
         gpio_put(22, 0);
         gpio_put(6, 0);
@@ -323,20 +320,12 @@ const char *nema23_set_current(double peak_a) {
     state.folded_back = false;
     return NULL;
 }
-uint32_t nema23_rearm_remaining_ms(void) {
-    if (state.phase == POWER_READY || state.phase == POWER_ENERGIZING) return 0;
-    uint64_t elapsed = time_us_64() - isolated_at;
-    return elapsed >= NEMA23_DISCHARGE_US ? 0 :
-           (uint32_t)((NEMA23_DISCHARGE_US - elapsed + 999) / 1000);
-}
+uint32_t nema23_rearm_remaining_ms(void) { return 0; }
 const char *nema23_arm(bool valid, double temperature) {
     if (!valid || temperature >= 55)
         return "Arming requires a valid temperature below 55 C";
-    if (!state.request_sent || state.requested_voltage < 9 || state.phase == POWER_DISCHARGE ||
-        state.phase == POWER_NEGOTIATING)
-        return "Request motor voltage and wait for settling";
-    if (time_us_64() - isolated_at < NEMA23_DISCHARGE_US)
-        return "Wait for motor rail discharge before rearming";
+    if (!state.request_sent || state.requested_voltage < 9 || state.phase == POWER_REQUESTING)
+        return "Request motor voltage first";
     if (pg_missing())
         return "PD power-good is missing (strict PG mode)";
     state.fault = NULL;
@@ -354,12 +343,8 @@ bool nema23_ready(void) {
 }
 nema23_status_t nema23_status(void) { return state; }
 const char *nema23_phase_name(void) {
-    if ((state.phase == POWER_CONTRACT || state.phase == POWER_OFF) &&
-        state.request_sent && state.requested_voltage >= 9 && nema23_rearm_remaining_ms())
-        return "Waiting to rearm motor power";
     const char *names[] = {"Motor rail off",
-                           "Discharging motor rail (12 s)",
-                           "Settling requested voltage (2 s)",
+                           "Requesting motor voltage",
                            "Ready to arm motor power",
                            "Waiting for protected rail",
                            "Motor power armed",
@@ -369,7 +354,7 @@ const char *nema23_phase_name(void) {
 void nema23_poll(uint64_t now, bool valid, double temperature) {
     if (pg_missing())
         gpio_put(8, 0);
-    if (state.phase == POWER_DISCHARGE && now >= deadline) {
+    if (state.phase == POWER_REQUESTING) {
         /* In optional strict mode, wait for hardware PG before probing. */
         if (pg_missing())
             return;
@@ -395,11 +380,6 @@ void nema23_poll(uint64_t now, bool valid, double temperature) {
         }
         state.request_sent = true;
         state.contract_valid = false;
-        state.phase = POWER_NEGOTIATING;
-        deadline = now + 2000000;
-        last_contract = 0;
-    }
-    if (state.phase == POWER_NEGOTIATING && now >= deadline) {
         (void)read_pd_status();
         last_contract = now;
         state.phase = state.requested_voltage == 5 ? POWER_OFF : POWER_CONTRACT;

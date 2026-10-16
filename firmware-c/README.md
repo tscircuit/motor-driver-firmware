@@ -97,6 +97,6 @@ The DRV8452 smart-tune ripple-control torque counter is observed by default. CTR
 
 Telemetry adds `stop_on_detected_fault`, `reported_fault`, `hardware_motion_inhibited`, `stall_detection_valid`, nullable `stall_torque_count`, `stall_suspected` and `stall_threshold`. A stall plot shares the current/temperature ten-second time window. Firmware stopping on the indication occurs only when the optional stop mode is enabled.
 
-### Rearm countdown (1.0.7)
+### Immediate power changes (1.0.9)
 
-`power_rearm_remaining_ms` reports the remaining 12-second discharge interval. A board with remaining cooldown no longer reports “Ready to arm motor power.” The interval starts when POWER_ARM actually transitions off; repeated settings/disarm commands while already off do not restart it. Voltage changes retain their explicit discharge and settling phases. The dashboard queues one requested enable across the countdown, clears pending state when armed, and cancels on disconnect, power-off or setting changes. Older firmware's discharge response is also retried after a visible countdown.
+Firmware 1.0.9 removes fixed NEMA23 discharge, rearm and voltage-settling delays. `power_rearm_remaining_ms` is zero. A voltage request isolates the driver and writes the PD controller on the next service cycle; successful communication permits an explicit enable immediately. Driver wake/SPI timing and the protected-rail startup failure timeout remain, with no minimum wait before a successful enable. Older firmware's discharge response is still supported by the dashboard.

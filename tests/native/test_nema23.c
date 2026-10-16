@@ -92,17 +92,10 @@ static void setup(void) {
 static void request20(void) {
     pd_written = 255;
     check("{\"cmd\":\"set_pd_voltage\",\"voltage\":20}", true);
-    fake_us += NEMA23_DISCHARGE_US - 1;
-    nema23_poll(fake_us, true, 25);
-    assert(pd_written == 255);
-    ++fake_us;
-    nema23_poll(fake_us, true, 25);
-    assert(pd_written == 4);
-    nema23_poll(fake_us, true, 25);
-    assert((!fake_pins[8] || nema23_status().ignore_pd_power_good) && !fake_pins[0]);
-    fake_us += 2000000;
     fake_pins[1] = 0;
     nema23_poll(fake_us, true, 25);
+    assert(pd_written == 4);
+    fake_pins[1] = 0;
     assert(nema23_status().phase == POWER_CONTRACT && !fake_pins[0]);
 }
 static void arm(void) {
@@ -257,19 +250,15 @@ static void test_reporting_mode(void) {
     assert(!nema23_status().stall_valid);
     setup();
 }
-static void test_rearm_countdown(void) {
+static void test_immediate_rearm(void) {
     setup();request20();arm();nema23_disarm();
-    assert(nema23_rearm_remaining_ms()==12000);
-    fake_us+=5000000;
-    assert(!nema23_set_current(2));
-    assert(nema23_rearm_remaining_ms()==7000);
-    assert(strcmp(nema23_phase_name(),"Waiting to rearm motor power")==0);
-    nema23_set_fuse_fault_override(true);
-    assert(nema23_rearm_remaining_ms()==7000);
-    fake_us+=7000000;
     assert(nema23_rearm_remaining_ms()==0);
-    assert(strcmp(nema23_phase_name(),"Motor rail off")==0);
-    assert(!nema23_arm(true,25));
+    assert(!nema23_set_current(2));
+    assert(nema23_rearm_remaining_ms()==0);
+    nema23_set_fuse_fault_override(true);
+    assert(nema23_rearm_remaining_ms()==0);
+    arm();
+    assert(spi_regs[0x0e] == nema23_current_code(2));
 }
 static void test_current_change_without_rail_cycle(void) {
     setup();request20();arm();
@@ -281,43 +270,31 @@ static void test_current_change_without_rail_cycle(void) {
     assert(nema23_status().current_peak_a == 2);
     assert(nema23_set_current(5));
     assert(nema23_ready() && nema23_status().current_peak_a == 2);
-    /* A current update must not shortcut a pending voltage request. */
+    /* A current update cannot claim a voltage request was already sent. */
     check("{\"cmd\":\"set_pd_voltage\",\"voltage\":15}", true);
-    assert(nema23_status().phase == POWER_DISCHARGE);
+    assert(nema23_status().phase == POWER_REQUESTING);
     assert(!nema23_set_current(1.5));
-    assert(nema23_status().phase == POWER_DISCHARGE);
+    assert(nema23_status().phase == POWER_REQUESTING);
     assert(nema23_arm(true,25));
-    fake_us += NEMA23_DISCHARGE_US;
     nema23_poll(fake_us,true,25);
-    assert(nema23_status().phase == POWER_NEGOTIATING);
-    assert(!nema23_set_current(1));
-    assert(nema23_status().phase == POWER_NEGOTIATING);
-    assert(nema23_arm(true,25));
-    fake_us += 2000000;
+    assert(pd_written == 3 && nema23_status().phase == POWER_CONTRACT);
     fake_pins[1] = 0;
-    nema23_poll(fake_us,true,25);
     arm();
-    assert(spi_regs[0x0e] == nema23_current_code(1));
+    assert(spi_regs[0x0e] == nema23_current_code(1.5));
 }
 int main(void) {
     test_current_change_without_rail_cycle();
-    test_rearm_countdown();
+    test_immediate_rearm();
     test_reporting_mode();
     test_current_overrides();
     setup();
     nema23_set_pg_override(true);
     pd_status = pd_current = 0;
     check("{\"cmd\":\"set_pd_voltage\",\"voltage\":15}", true);
-    fake_us += NEMA23_DISCHARGE_US;
-    nema23_poll(fake_us, true, 25);
-    assert(pd_written == 3 && nema23_status().phase == POWER_NEGOTIATING);
     pd_read_failed = true;
-    fake_us += 1999999;
     nema23_poll(fake_us, true, 25);
-    assert(nema23_status().phase == POWER_NEGOTIATING && !fake_pins[0]);
-    ++fake_us;
-    nema23_poll(fake_us, true, 25);
-    assert(nema23_status().phase == POWER_CONTRACT && !nema23_status().contract_valid);
+    assert(pd_written == 3 && nema23_status().phase == POWER_CONTRACT);
+    assert(!nema23_status().contract_valid && !fake_pins[0]);
     arm();
     fake_us += 5000000;
     nema23_poll(fake_us, true, 25);
@@ -503,6 +480,6 @@ int main(void) {
     assert(!nema23_ready() && !fake_pins[0]);
     setup();
     assert(!nema23_status().ignore_pd_power_good);
-    puts("NEMA23: pins, 12s discharge, requested PD with non-blocking status, optional PG, explicit arm, SPI mode/readback, "
+    puts("NEMA23: pins, immediate voltage requests/rearm, requested PD with non-blocking status, optional PG, explicit arm, SPI mode/readback, "
          "foldback, thermal/power/USB latches, bounds and 0.2 V/A scaling passed");
 }

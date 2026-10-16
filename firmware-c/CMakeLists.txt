@@ -50,7 +50,7 @@ target_compile_options(motorcontrol PRIVATE -Wall -Wextra -Werror -Wno-unused-pa
 target_link_libraries(motorcontrol pico_stdlib pico_rand pico_unique_id pico_multicore pico_flash hardware_pio hardware_dma hardware_i2c hardware_adc hardware_pwm hardware_flash hardware_sync hardware_watchdog tinyusb_device tinyusb_board m)
 target_link_options(motorcontrol PRIVATE "LINKER:-T,${CMAKE_CURRENT_LIST_DIR}/memory_guard.ld")
 pico_set_program_name(motorcontrol "motorcontrol-native")
-pico_set_program_version(motorcontrol "1.0.8")
+pico_set_program_version(motorcontrol "1.0.9")
 pico_enable_stdio_usb(motorcontrol 0)
 pico_enable_stdio_uart(motorcontrol 0)
 pico_add_extra_outputs(motorcontrol)
