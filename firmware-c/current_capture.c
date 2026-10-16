@@ -11,10 +11,10 @@
 static uint64_t analysis_cursor;
 void current_capture_analyze(void);
 #endif
-#define RING_WORDS 8192u
+#define RING_WORDS 16384u
 /* Multiple of the ring size, so each DMA restart preserves channel parity. */
 #define BLOCK_WORDS 0xffffe000u
-static volatile uint16_t ring[RING_WORDS] __attribute__((aligned(16384)));
+static volatile uint16_t ring[RING_WORDS] __attribute__((aligned(32768)));
 static int channel;
 static volatile uint64_t completed_words;
 static uint64_t started_us, cursor, dropped;
@@ -46,7 +46,7 @@ void current_capture_init(void) {
     channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
     channel_config_set_read_increment(&c, false);
     channel_config_set_write_increment(&c, true);
-    channel_config_set_ring(&c, true, 14);
+    channel_config_set_ring(&c, true, 15);
     channel_config_set_dreq(&c, DREQ_ADC);
     dma_channel_configure(channel, &c, (void *)ring, &adc_hw->fifo, BLOCK_WORDS, false);
     /* Motor edge counting owns DMA IRQ 0; ADC uses the independent IRQ 1. */

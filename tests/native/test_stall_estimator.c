@@ -27,7 +27,8 @@ int main(void){
     samples independently of any USB export. */
  stall_estimator_init(true);stall_estimator_context(c,now);
  for(unsigned i=0;i<150000;i++){float phase=6.2831853f*15*i/100000;uint16_t a=(uint16_t)(2048+1000*sinf(phase)),b=(uint16_t)(2048+1000*cosf(phase));stall_estimator_sample(a,b,now);now+=10;}
- for(unsigned j=0;j<65;j++)stall_estimator_evaluate(now);r=stall_estimator_result();assert(r.analyzed==150000&&r.dropped==0&&r.valid);
+ for(unsigned j=0;j<65;j++){stall_estimator_evaluate(now);}
+ r=stall_estimator_result();assert(r.analyzed==150000&&r.dropped==0&&r.valid);
  stall_estimator_sample(0,2048,now);assert(!stall_estimator_result().valid&&stall_estimator_result().dropped==1);
  puts("PASS native current estimator: recorded classes, resolution normalization, extrapolation, raw 100 kHz accounting, stopped/fault/data-gap and bandwidth gates");
 }
