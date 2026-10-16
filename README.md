@@ -180,9 +180,23 @@ The single-motor jogging page lists only the connected board's supported step si
 
 Board controls include USB-PD requests, manual/automatic RGB colors, winding-current samples and separate requested/measured voltage labels. On PCB release 1.0.42, R_PD_VBUS connects the motor USB input to CH224K VBUS, not an RP2040 ADC. GPIO26/27 (ADC0/1) carry TMP102 I2C, and GPIO28/29 (ADC2/3) carry winding current. The page therefore displays measured PD voltage as unavailable on this board. A future board's actual `pd_voltage_measured` telemetry is displayed when supplied; requested voltage is never substituted for measurement.
 
-### High-rate winding current graphs
+### Shared temperature and current graphs
 
-The bench, single-motor and gantry pages share a rolling ten-second current graph.
+The bench, single-motor and gantry pages mount the same reusable sensor widget
+from `dist/current-chart.js` and `dist/current-chart.css`. Each board has a
+rolling ten-second temperature plot and, when supported, a coil-current plot on
+the same time window. The temperature plot includes its saved alarm threshold;
+missing sensor readings and communication gaps are not drawn as zero or joined.
+Boards without current sensing show temperature with an explicit unavailable
+current note. The bench also retains its longer five-minute temperature history.
+
+To reuse the widget, add a card with `data-current-axis="<axis>"`, a heading,
+a current canvas and `[data-current-summary]`; the shared mount adds the
+temperature plot. Feed frames through `CurrentCharts.receive(axis, frame)` and
+call `reset(axis)` / `disconnect(axis)` for connection lifecycle changes.
+Temperature is taken from ordinary telemetry even while high-rate current frames
+arrive; full and compact snapshots work independently for each board.
+
 Native firmware captures ADC channels 2 and 3 at 100,000 samples/sec per winding
 (200,000 total) with round-robin ADC and a DMA ring, independently of PIO motion.
 Every 20 ms it sends `current_samples` frames containing 1 ms min/max/sum/count

@@ -1,4 +1,4 @@
-/* Hardware captures 100 kHz per winding. Display 10 ms buckets without losing peaks. */
+/* Shared temperature/current widget. Retain 100 kHz winding peaks in 10 ms display buckets. */
 (function(root){
 'use strict';
 const scale=(raw,voltsPerAmp=1)=>(raw*3.3/4095-1.65)/voltsPerAmp;
@@ -36,8 +36,21 @@ class CurrentHistory {
   this.points=this.points.filter(p=>p.t>=now-10000).slice(-1100);
  }
 }
+// Temperature uses the same rolling time window as winding current, independently
+// of current-frame frequency and availability. Missing samples remain gaps.
+class TemperatureHistory {
+ constructor(){this.reset();}
+ reset(){this.points=[];this.seen=0;this.threshold=null;}
+ receive(d,now=Date.now()){
+  if(d.type!=='telemetry'||!Object.hasOwn(d,'temperature_c'))return;
+  const value=Number.isFinite(d.temperature_c)?d.temperature_c:null;
+  this.points.push({t:now,value});this.seen=now;
+  if(Object.hasOwn(d,'threshold_c'))this.threshold=Number.isFinite(d.threshold_c)?d.threshold_c:null;
+  this.points=this.points.filter(p=>p.t>=now-10000).slice(-1100);
+ }
+}
 const charts=new Map();
-function draw(chart,now){
+function drawCurrent(chart,now){
  const {canvas,history:h,summary}=chart,ctx=canvas.getContext('2d');
  const width=canvas.clientWidth||600,height=220,dpr=root.devicePixelRatio||1;
  if(canvas.width!==width*dpr||canvas.height!==height*dpr){canvas.width=width*dpr;canvas.height=height*dpr;}
@@ -62,11 +75,61 @@ function draw(chart,now){
  const live=h.seen&&now-h.seen<1500;
  summary.textContent=`A: ${values[0]} · B: ${values[1]} · ${live?(h.rate?`${h.rate.toLocaleString()} samples/sec per winding`:'Standard telemetry'):'Waiting for live current'}${h.dropped?' · '+h.dropped.toLocaleString()+' samples skipped':''}`;
 }
-const api={CurrentHistory,receive:(axis,d)=>charts.get(axis)?.history.receive(d),reset:axis=>charts.get(axis)?.history.reset(),disconnect:axis=>{const h=charts.get(axis)?.history;if(h)h.seen=0;}};
+function drawTemperature(chart,now){
+ const {temperatureCanvas:canvas,temperatureHistory:h,temperatureSummary:summary}=chart,ctx=canvas.getContext('2d');
+ const width=canvas.clientWidth||600,height=220,dpr=root.devicePixelRatio||1;
+ if(canvas.width!==width*dpr||canvas.height!==height*dpr){canvas.width=width*dpr;canvas.height=height*dpr;}
+ ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,width,height);
+ const left=49,right=width-12,top=12,bottom=height-30;
+ const visible=h.points.filter(p=>p.t>=now-10000),values=visible.filter(p=>p.value!==null).map(p=>p.value);
+ let low=Math.floor((Math.min(...values,20)-5)/5)*5,high=Math.ceil((Math.max(...values,30)+5)/5)*5;
+ if(h.threshold!==null){low=Math.min(low,Math.floor(h.threshold/5)*5);high=Math.max(high,Math.ceil(h.threshold/5)*5+5);}
+ const x=t=>left+(t-(now-10000))/10000*(right-left),y=v=>top+(high-v)/(high-low)*(bottom-top);
+ ctx.font='12px system-ui';ctx.strokeStyle='#334155';ctx.fillStyle='#94a3b8';ctx.lineWidth=1;
+ for(let j=0;j<=4;j++){const v=low+(high-low)*j/4;ctx.beginPath();ctx.moveTo(left,y(v));ctx.lineTo(right,y(v));ctx.stroke();ctx.fillText(v.toFixed(1),3,y(v)+4);}
+ for(let j=0;j<=5;j++)ctx.fillText(j===5?'now':`${10-2*j}s`,left+j*(right-left)/5-8,height-8);
+ if(h.threshold!==null){ctx.strokeStyle='#fb7185';ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(left,y(h.threshold));ctx.lineTo(right,y(h.threshold));ctx.stroke();ctx.setLineDash([]);}
+ ctx.strokeStyle='#75efd0';ctx.lineWidth=2;ctx.beginPath();let prev=null;
+ for(const p of visible){if(p.value===null){prev=null;continue;}if(prev!==null&&p.t-prev<1000)ctx.lineTo(x(p.t),y(p.value));else ctx.moveTo(x(p.t),y(p.value));prev=p.t;}
+ ctx.stroke();
+ const last=visible.at(-1),live=h.seen&&now-h.seen<1500;
+ summary.textContent=`${last?.value!=null?last.value.toFixed(1)+' °C':'Temperature unavailable'} · ${live?'Live temperature':'Waiting for live temperature'}${h.threshold!==null?' · Alarm at '+h.threshold+' °C':''}`;
+}
+function mount(card){
+ const document=root.document,heading=card.querySelector('h3');
+ const node=(tag,className,text)=>{const n=document.createElement(tag);if(className)n.className=className;if(text)n.textContent=text;return n;};
+ const plots=node('div','sensorPlots'),temperaturePanel=node('section','temperaturePlot');
+ const temperatureCanvas=node('canvas'),temperatureSummary=node('p');
+ temperatureCanvas.setAttribute('aria-label',`${heading.textContent}: board temperature over the last ten seconds`);temperatureCanvas.setAttribute('role','img');
+ temperatureSummary.setAttribute('data-temperature-summary','');
+ temperatureSummary.textContent='Waiting for live temperature';
+ const temperatureLegend=node('div','temperatureLegend','Temperature');temperatureLegend.append(node('span',null,'Alarm threshold'));
+ temperaturePanel.append(node('h4',null,'Board temperature · °C'),temperatureLegend,temperatureCanvas,temperatureSummary);
+ const currentPanel=node('section','windingPlot'),canvas=card.querySelector('canvas'),summary=card.querySelector('[data-current-summary]');
+ currentPanel.append(node('h4',null,'Coil current · A'));
+ for(const child of Array.from(card.children))if(child!==heading)currentPanel.append(child);
+ const unavailable=node('p','currentUnavailable','Current measurement unavailable on this board.');unavailable.hidden=true;
+ plots.append(temperaturePanel,currentPanel);card.append(plots,unavailable);
+ return {canvas,summary,temperatureCanvas,temperatureSummary,currentPanel,unavailable,history:new CurrentHistory(),temperatureHistory:new TemperatureHistory(),currentSupported:null};
+}
+function receive(chart,d,now=Date.now()){
+ if(!chart)return;
+ chart.history.receive(d,now);chart.temperatureHistory.receive(d,now);
+ if(d.type==='current_samples')chart.currentSupported=true;
+ if(d.type==='telemetry'&&Object.hasOwn(d,'current_available')){
+  if(d.current_available||Array.isArray(d.winding_current_a))chart.currentSupported=true;
+  else if(d.capabilities)chart.currentSupported=!!d.capabilities.current_stream_supported;
+ }
+ chart.currentPanel.hidden=chart.currentSupported===false;chart.unavailable.hidden=chart.currentSupported!==false;
+}
+const api={CurrentHistory,TemperatureHistory,
+ receive:(axis,d)=>receive(charts.get(axis),d),
+ reset:axis=>{const c=charts.get(axis);if(c){c.history.reset();c.temperatureHistory.reset();c.currentSupported=null;c.currentPanel.hidden=false;c.unavailable.hidden=true;}},
+ disconnect:axis=>{const c=charts.get(axis);if(c){c.history.seen=0;c.temperatureHistory.seen=0;}}};
 if(typeof module!=='undefined')module.exports=api;
 if(root.document){
- for(const card of root.document.querySelectorAll('[data-current-axis]'))charts.set(card.dataset.currentAxis,{canvas:card.querySelector('canvas'),summary:card.querySelector('[data-current-summary]'),history:new CurrentHistory()});
- let last=0;function tick(t){if(t-last>=50){last=t;for(const chart of charts.values())draw(chart,Date.now());}root.requestAnimationFrame(tick);}root.requestAnimationFrame(tick);
+ for(const card of root.document.querySelectorAll('[data-current-axis]'))charts.set(card.dataset.currentAxis,mount(card));
+ let last=0;function tick(t){if(t-last>=50){last=t;const now=Date.now();for(const chart of charts.values()){drawTemperature(chart,now);if(!chart.currentPanel.hidden)drawCurrent(chart,now);}}root.requestAnimationFrame(tick);}root.requestAnimationFrame(tick);
  root.CurrentCharts=api;
 }
 })(typeof window==='undefined'?globalThis:window);
