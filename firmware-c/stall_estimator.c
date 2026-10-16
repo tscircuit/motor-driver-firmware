@@ -4,7 +4,7 @@
 static float bins[STALL_HISTORY][4];
 static unsigned head, available;
 static uint64_t last_bin, stable_since, last_evaluation;
-static bool calibrated, job_active;
+static bool calibrated, job_active, trace_capture;
 static stall_context_t context;
 static stall_result_t result;
 static uint32_t raw_count, sum[2], low[2], high[2];
@@ -13,12 +13,17 @@ static const float free_model[7]={0.8541027778f,0.03647127341f,0.09991558061f,0.
 static const float stall_model[7]={0.8248254064f,0.1464264593f,0.116381948f,0.7381990353f,0.3902486648f,1.191072041f,0.1620298415f};
 static const float scale[7]={0.01f,0.01869123035f,0.005f,0.0382675868f,0.2023342691f,0.5694764015f,0.08654615453f};
 static void clear_window(void){job_active=false;head=available=raw_count=0;last_bin=0;bin_start=0;memset(sum,0,sizeof(sum));memset(square,0,sizeof(square));}
-void stall_estimator_init(bool device){calibrated=device;context=(stall_context_t){0};result=(stall_result_t){.reason="Motor stopped"};stable_since=last_evaluation=0;clear_window();}
+void stall_estimator_init(bool device){calibrated=device;trace_capture=false;context=(stall_context_t){0};result=(stall_result_t){.reason="Motor stopped"};stable_since=last_evaluation=0;clear_window();}
 void stall_estimator_context(stall_context_t c,uint64_t now){
  bool changed=c.moving!=context.moving||c.voltage!=context.voltage||c.direction!=context.direction||c.factor!=context.factor||fabsf(c.speed-context.speed)>.001f;
  context=c;
  bool steady=c.moving&&c.healthy&&c.factor>0&&fabsf(c.profile_speed-c.speed)<=fmaxf(.01f,c.speed*.05f);
- if(changed||!steady){clear_window();stable_since=now;result.valid=false;}
+ if(changed||!steady){
+  /* Preserve samples for post-run download, without running the estimator on
+     a stopped motor. Starting again still clears the old window normally. */
+  if(trace_capture&&!c.moving){job_active=false;}else{clear_window();}
+  stable_since=now;result.valid=false;
+ }
  if(!c.moving){result.valid=false;result.reason="Motor stopped";}
  else if(!c.healthy){result.valid=false;result.reason="Electrical or sensor fault";}
  else if(!steady){result.valid=false;result.reason="Waiting for steady speed";}
@@ -104,3 +109,14 @@ void stall_estimator_compute_time(uint32_t us){if(us>result.compute_max_us)resul
 stall_result_t stall_estimator_result(void){return result;}
 
 bool stall_estimator_active(void){return context.moving&&context.healthy;}
+bool stall_estimator_trace_begin(void){
+ if(context.moving)return false;
+ trace_capture=true;clear_window();return true;
+}
+unsigned stall_estimator_trace_count(void){return trace_capture&&!context.moving?available:0;}
+bool stall_estimator_trace_bin(unsigned index,float values[4],uint64_t *at){
+ unsigned count=stall_estimator_trace_count();
+ if(index>=count)return false;
+ memcpy(values,bins[(head+STALL_HISTORY-count+index)%STALL_HISTORY],sizeof(bins[0]));
+ *at=last_bin-(uint64_t)(count-1-index)*1000;return true;
+}
