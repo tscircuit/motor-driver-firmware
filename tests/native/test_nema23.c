@@ -132,8 +132,8 @@ int main(void) {
     setup();
     check("{\"cmd\":\"beep\",\"duration_ms\":2000}", true);
     indicators(fake_us, fake_motor);
-    assert(buzzer_frequency == 2731 && test_until == fake_us + 2000000);
-    fake_us += 1999999;
+    assert(buzzer_frequency == 2731 && test_until == fake_us + 1999000);
+    fake_us = test_until - 1;
     indicators(fake_us, fake_motor);
     assert(buzzer_frequency == 2731);
     ++fake_us;

@@ -56,6 +56,7 @@ static int led_bits, buzzer_frequency;
 static uint16_t song_hz[48], song_ms[48];
 static size_t song_length, song_index;
 static uint64_t song_until;
+static bool buzzer_output_tested, buzzer_output_toggling;
 static uint32_t diagnostic_pulses, diagnostic_elapsed;
 static motor_mode_t previous_mode = STOPPED;
 extern volatile bool usb_boot_requested;
@@ -419,6 +420,8 @@ static void status(bool compact) {
         add_number(o, "threshold_c", settings.threshold);
         add_bool(o, "buzzer_on", buzzer_frequency != 0);
         add_number(o, "buzzer_frequency_hz", buzzer_frequency);
+        add_bool(o, "buzzer_output_tested", buzzer_output_tested);
+        add_bool(o, "buzzer_output_toggling", buzzer_output_toggling);
         add_bool(o, "song_playing", song_length != 0);
         add_number(o, "song_note", song_length ? song_index + 1 : 0);
         cJSON_AddItemToObject(o, "supported_resolutions", cJSON_CreateStringArray(resolutions, RESOLUTION_COUNT));
@@ -772,6 +775,20 @@ static void command(const char *line) {
         else {
             song_length = 0;
             test_until = time_us_64() + (uint64_t)(duration_ms * 1000);
+            if (!alarm) {
+                /* Read the pad input during a short bounded tone-output test.
+                   This detects output transitions, not audible sound. */
+                buzzer(2731);
+                bool saw_low = false, saw_high = false;
+                for (unsigned i = 0; i < 50; ++i) {
+                    bool level = gpio_get(BUZZER_PIN);
+                    saw_low |= !level;
+                    saw_high |= level;
+                    sleep_us(20);
+                }
+                buzzer_output_tested = true;
+                buzzer_output_toggling = saw_low && saw_high;
+            }
         }
     } else if (matches(cmd, "test_pulses")) {
 #ifdef MOTOR_BOARD_DRV8847
