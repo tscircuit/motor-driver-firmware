@@ -44,13 +44,14 @@ function card(axis){const c=new Node('section');c.dataset.currentAxis=axis;const
 const cards=[card('X'),card('Y')];let tick;
 const sandbox={document:{createElement:tag=>new Node(tag),querySelectorAll:()=>cards},requestAnimationFrame:fn=>{tick=fn;},devicePixelRatio:1,Date};
 sandbox.window=sandbox;
+vm.runInNewContext(fs.readFileSync('dist/current-stall.js','utf8'),sandbox);
 vm.runInNewContext(fs.readFileSync('dist/current-chart.js','utf8'),sandbox);
 const widget=sandbox.CurrentCharts;
 widget.receive('X',{type:'telemetry',temperature_c:25,threshold_c:55,current_available:false,capabilities:{}});
 widget.receive('Y',{type:'telemetry',temperature_c:28,current_available:true,winding_current_a:[.3,-.4],capabilities:{current_stream_supported:true}});
 tick(100);
 const plots=cards.map(c=>c.descendants());
-assert.equal(plots[0].filter(n=>n.tag==='canvas').length,3);
+assert.equal(plots[0].filter(n=>n.tag==='canvas').length,4);
 assert.ok(plots[0].find(n=>n.className==='windingPlot').hidden);
 assert.equal(plots[0].find(n=>n.className==='currentUnavailable').hidden,false);
 assert.match(plots[0].find(n=>Object.hasOwn(n.attributes,'data-temperature-summary')).textContent,/25.0 °C.*Live temperature.*55 °C/);
@@ -82,3 +83,8 @@ assert.equal(cards[1].descendants().find(n=>n.className==='stallUnavailable').hi
 assert.match(cards[1].descendants().find(n=>n.className==='stallUnavailable').textContent,/DRV8825.*does not provide torque count/);
 assert.equal(plots[1].find(n=>n.className==='windingPlot').hidden,false);
 widget.reset('Y');assert.equal(cards[1].descendants().find(n=>n.className==='stallUnavailable').hidden,true);
+
+widget.receive('Y',{type:'telemetry',driver:'DRV8825',device_id:'e66568714f117e21',board_id:'rp2040_drv8825',motor_enabled:false,motion_mode:'stopped',current_available:true,capabilities:{stall_detection_supported:false}});tick(800);
+assert.equal(cards[1].descendants().find(n=>n.className==='currentStallPlot').hidden,false);
+assert.match(cards[1].descendants().find(n=>n.attributes.role==='status').textContent,/Unknown/);
+widget.reset('Y');assert.equal(cards[1].descendants().find(n=>n.className==='currentStallPlot').hidden,true);
