@@ -8,6 +8,16 @@ function controlState(d,seen,now=Date.now()){
  // produce an actionable board response instead of an unexplained disabled button.
  return {supported,live,canSet:live&&stopped,canArm:live&&stopped&&!d?.motor_power_ready};
 }
+function rearmRemaining(a){
+ const ms=a.last?.power_rearm_remaining_ms;
+ return Math.max(0,Number.isFinite(ms)?ms-(Date.now()-a.seen):0,(a.retryAt||0)-Date.now());
+}
+function queueCooldown(a,e){
+ if(!/Wait for motor rail discharge before rearming/.test(e.message))return false;
+ a.error=null;a.enablePending=true;
+ a.retryAt=Date.now()+(Number.isFinite(a.last?.power_rearm_remaining_ms)?250:12000);
+ return true;
+}
 function stallText(d){
  if(d.hardware_motion_inhibited)return 'Stall status unknown · hardware power/temperature interlock active. Commanded steps do not prove shaft movement.';
  if(!d.stall_detection_valid)return 'Stall status unknown · collecting torque data during motion.';
@@ -32,41 +42,41 @@ function mount(axis){
  const applyStall=element('button','Apply stall threshold');applyStall.type='button';panel.append(applyStall);
  const stallSummary=element('p');stallSummary.setAttribute('role','status');panel.append(stallSummary);
  const status=element('p'),note=element('p');status.setAttribute('role','status');status.className='powerStatus';note.className='hint';panel.append(status,note);parent.append(panel);
- const device={panel,input,apply,arm,off,status,note,last:null,seen:0,enablePending:false,dirty:false,busy:false,error:null,send:null,parent,pg,pgLabel,fuse,fuseLabel,ocp,ocpLabel,winding,windingLabel,stopLabel,stopFault,stallLabel,stallThreshold,applyStall,stallSummary};
+ const device={panel,input,apply,arm,off,status,note,last:null,seen:0,enablePending:false,retryAt:0,dirty:false,busy:false,error:null,send:null,parent,pg,pgLabel,fuse,fuseLabel,ocp,ocpLabel,winding,windingLabel,stopLabel,stopFault,stallLabel,stallThreshold,applyStall,stallSummary};
  input.addEventListener('input',()=>{device.dirty=true;});
  async function request(cmd,fields={}){
-  device.error=null;device.busy=true;render(device);
-  try{await device.send(cmd,fields);await device.send('status');device.dirty=false;}catch(e){device.enablePending=false;device.error=e.message;}finally{device.busy=false;tryEnable(device);render(device);}
+  device.error=null;device.busy=true;if(cmd!=='arm_power')device.retryAt=0;render(device);
+  try{await device.send(cmd,fields);await device.send('status');device.dirty=false;}catch(e){if(cmd!=='arm_power'||!queueCooldown(device,e)){device.enablePending=false;device.error=e.message;}}finally{device.busy=false;tryEnable(device);render(device);}
  }
- apply.addEventListener('click',()=>{const value=Number(input.value);if(!Number.isFinite(value)||value<.1||value>device.last.capabilities.current_limit_max_a){status.textContent='Choose a peak current within the board’s supported range.';return;}void request('set_current_limit',{peak_a:value});});
+ apply.addEventListener('click',()=>{device.enablePending=false;const value=Number(input.value);if(!Number.isFinite(value)||value<.1||value>device.last.capabilities.current_limit_max_a){status.textContent='Choose a peak current within the board’s supported range.';return;}void request('set_current_limit',{peak_a:value});});
  stopFault.addEventListener('change',()=>{device.enablePending=false;void request('set_stop_on_detected_fault',{enabled:stopFault.checked});});
- applyStall.addEventListener('click',()=>{const threshold=Number(stallThreshold.value);if(!Number.isInteger(threshold)||threshold<1||threshold>4095){status.textContent='Choose a stall threshold from 1 to 4095.';return;}void request('set_stall_threshold',{threshold});});
+ applyStall.addEventListener('click',()=>{device.enablePending=false;const threshold=Number(stallThreshold.value);if(!Number.isInteger(threshold)||threshold<1||threshold>4095){status.textContent='Choose a stall threshold from 1 to 4095.';return;}void request('set_stall_threshold',{threshold});});
  ocp.addEventListener('change',()=>{device.enablePending=false;void request('set_overcurrent_shutdown_override',{enabled:ocp.checked});});
  winding.addEventListener('change',()=>{device.enablePending=false;void request('set_winding_current_limit_override',{enabled:winding.checked});});
  fuse.addEventListener('change',()=>{device.enablePending=false;void request('set_fuse_power_fault_override',{enabled:fuse.checked});});
- pg.addEventListener('change',()=>void request('set_pd_power_good_override',{enabled:pg.checked}));
+ pg.addEventListener('change',()=>{device.enablePending=false;void request('set_pd_power_good_override',{enabled:pg.checked});});
  arm.addEventListener('click',()=>{
   if(!device.last.pd_request_sent||device.last.pd_voltage_requested<9){
    device.enablePending=true;void request('set_pd_voltage',{voltage:20});
-  }else if(/Discharging|Negotiating|Settling|Waiting for protected/.test(device.last.power_state||'')){device.enablePending=true;render(device);}
+  }else if(rearmRemaining(device)>0||/Discharging|Negotiating|Settling|Waiting to rearm|Waiting for protected/.test(device.last.power_state||'')){device.enablePending=true;render(device);}
   else{void request('arm_power');}
  });
  off.addEventListener('click',()=>{device.enablePending=false;void request('disarm_power');});
  return device;
 }
 function tryEnable(a){
- if(!a.enablePending||a.busy)return;
  const d=a.last;
+ if(d?.motor_power_ready){a.enablePending=false;a.error=null;return;}
+ if(!a.enablePending||a.busy||!controlState(d,a.seen).live||rearmRemaining(a)>0)return;
  if(!d.pd_request_sent||d.pd_voltage_requested<9)return;
- if(d.power_error){a.enablePending=false;return;}
- if(d.power_state!=='Ready to arm motor power'&&d.power_state!=='Motor rail off')return;
+ if(d.power_state!=='Ready to arm motor power'&&d.power_state!=='Motor rail off'&&!/^Fault latched/.test(d.power_state||''))return;
  a.enablePending=false;a.busy=true;
- Promise.resolve().then(()=>a.send('arm_power')).then(()=>a.send('status')).catch(e=>{a.error=e.message;}).finally(()=>{a.busy=false;render(a);});
+ Promise.resolve().then(()=>a.send('arm_power')).then(()=>a.send('status')).catch(e=>{if(!queueCooldown(a,e))a.error=e.message;}).finally(()=>{a.busy=false;render(a);});
 }
 function render(a){
  const d=a.last||{},s=controlState(d,a.seen);a.panel.hidden=!s.supported;
  if(!s.supported)return;
- a.apply.disabled=a.input.disabled=!s.canSet||a.busy;a.arm.disabled=!s.canArm||a.busy||a.enablePending;a.arm.textContent=a.enablePending?'Enabling motor power…':'Enable motor power';a.off.disabled=!s.live||a.busy;
+ a.apply.disabled=a.input.disabled=!s.canSet||a.busy;a.arm.disabled=!s.canArm||a.busy||a.enablePending;a.arm.textContent=a.enablePending?(rearmRemaining(a)>0?'Enable in '+Math.ceil(rearmRemaining(a)/1000)+' s…':'Enabling motor power…'):'Enable motor power';a.off.disabled=!s.live||a.busy;
  a.pgLabel.hidden=!d.capabilities.pd_power_good_override_supported;a.pg.disabled=!s.live||!s.canSet||a.busy;a.pg.checked=!!d.pd_power_good_override;
  a.fuseLabel.hidden=!d.capabilities.fuse_power_fault_override_supported;a.fuse.disabled=!s.live||!s.canSet||a.busy;a.fuse.checked=!!d.fuse_power_fault_override;
  a.ocpLabel.hidden=!d.capabilities.overcurrent_shutdown_override_supported;a.ocp.disabled=!s.live||!s.canSet||a.busy;a.ocp.checked=!!d.overcurrent_shutdown_override;
@@ -81,10 +91,10 @@ function render(a){
  a.note.textContent='Enable requests 20 V if no motor voltage is selected. Current resets to 1 A on reboot. Ignoring fuse power fault resets on reboot; changing overrides disconnects motor power. Peak-limit bypass uses full scale (about 3.965 A peak). Overcurrent override uses auto-retry; the hardware trip remains active. Both current overrides reset on reboot. Stall/fault reporting is on by default; stopping on detections defaults off. Hardware interlocks can still inhibit motion. The overcurrent override applies when stopping on detection is selected. Thermal, sensor, communication and SPI configuration protection remain active.';
  for(const e of a.parent.querySelectorAll('[data-default-power-note]'))e.hidden=true;
  if(!s.live){a.enablePending=false;a.status.textContent='Waiting for live board status.';return;}
- a.status.textContent=`${a.error?a.error+' · ':''}${d.power_error||d.power_state||'Motor rail off'}${d.reported_fault?' · Warning: '+d.reported_fault:''}${d.capabilities.fault_stop_mode_supported?' · Fault mode: '+(d.stop_on_detected_fault?'stop on detection':'report only'):''} · PD power-good: ${d.pd_power_good?'yes':'no'}${d.pd_power_good_override?' (ignored)':''} · Fuse fault: ${d.power_fault_asserted?'asserted':'clear'}${d.fuse_power_fault_override?' (ignored)':''} · PD reported current: ${Number(d.pd_contract_current_a||0).toFixed(2)} A (informational)${d.overcurrent_shutdown_override?' · Overcurrent: auto-retry (software shutdown ignored)':''}${d.winding_current_limit_override?' · Peak limit bypassed: '+Number(d.effective_current_peak_a??d.capabilities.current_limit_max_a).toFixed(3)+' A':''}${d.current_foldback_active?' · current reduced for temperature':''}`;
+ a.status.textContent=`${a.error?a.error+' · ':''}${d.power_error||d.power_state||'Motor rail off'}${rearmRemaining(a)>0?' · Rearm in '+Math.ceil(rearmRemaining(a)/1000)+' s':''}${d.reported_fault?' · Warning: '+d.reported_fault:''}${d.capabilities.fault_stop_mode_supported?' · Fault mode: '+(d.stop_on_detected_fault?'stop on detection':'report only'):''} · PD power-good: ${d.pd_power_good?'yes':'no'}${d.pd_power_good_override?' (ignored)':''} · Fuse fault: ${d.power_fault_asserted?'asserted':'clear'}${d.fuse_power_fault_override?' (ignored)':''} · PD reported current: ${Number(d.pd_contract_current_a||0).toFixed(2)} A (informational)${d.overcurrent_shutdown_override?' · Overcurrent: auto-retry (software shutdown ignored)':''}${d.winding_current_limit_override?' · Peak limit bypassed: '+Number(d.effective_current_peak_a??d.capabilities.current_limit_max_a).toFixed(3)+' A':''}${d.current_foldback_active?' · current reduced for temperature':''}`;
 }
-function disconnect(axis){const a=devices.get(axis);if(!a)return;a.enablePending=false;a.last=null;a.seen=0;a.error=null;render(a);}
+function disconnect(axis){const a=devices.get(axis);if(!a)return;a.enablePending=false;a.retryAt=0;a.last=null;a.seen=0;a.error=null;render(a);}
 const api={controlState,stallText,disconnect,receive(axis,d,send){if(d.type!=='telemetry')return;let a=devices.get(axis);if(!a){if(!d.capabilities?.power_arm_required)return;a=mount(axis);if(!a)return;devices.set(axis,a);}a.last=d.compact?{...a.last,...d}:d;a.seen=Date.now();a.send=send;tryEnable(a);render(a);}};
 if(typeof module!=='undefined')module.exports=api;
-if(root.document){root.BoardControls=api;root.setInterval(()=>{for(const a of devices.values())render(a);},200);}
+if(root.document){root.BoardControls=api;root.setInterval(()=>{for(const a of devices.values()){tryEnable(a);render(a);}},200);}
 })(typeof window==='undefined'?globalThis:window);
