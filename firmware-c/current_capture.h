@@ -20,5 +20,8 @@ void current_capture_init(void);
 bool current_capture_snapshot(uint16_t raw[2]);
 void current_capture_read(current_frame_t *frame, bool connected);
 void current_capture_drop(unsigned bins);
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+void current_capture_analyze(void);
+#endif
 void current_stats_add(current_stats_t *stats, uint16_t raw);
 #endif

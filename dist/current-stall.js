@@ -87,7 +87,7 @@ class Observer{
    const key=active?[s.pd_voltage_requested,s.direction,this.fullSpeed].join(':'):null;
    if(!active||key!==this.key)this.stableSince=active?now:null;
    this.key=key;
-  }else if(d.type==='current_samples'){
+  }else if(d.type==='current_samples'&&!this.state.capabilities?.current_stall_firmware_supported){
    if(d.window_us!==1000||d.current_volts_per_amp!==1||!Array.isArray(d.bins)||!Number.isFinite(d.first_sample_us))return;
    const start=d.first_sample_us/1000;if(this.points.length&&start<this.points.at(-1)[0]-100){this.points=[];this.stableSince=now;}
    let added=false;
@@ -104,6 +104,13 @@ class Observer{
  evaluate(now=Date.now()){
   if(now-this.lastEval<250)return this.result;
   this.lastEval=now;const s=this.state,m=this.model;let reason=null,score=null;
+  if(s.capabilities?.current_stall_firmware_supported){
+   const live=this.lastTelemetry!==null&&now-this.lastTelemetry<1500;
+   score=live&&s.motor_enabled&&s.current_stall_valid&&Number.isFinite(s.current_stall_score)?s.current_stall_score:null;
+   reason=!live?'Waiting for firmware telemetry.':!s.motor_enabled?'Motor stopped.':s.current_stall_reason||'Collecting current samples.';
+   this.result={score,reason,firmware:true,extrapolated:!!s.current_stall_extrapolated,outlier:!!s.current_stall_outlier};
+   this.history.push({t:now,score});this.history=this.history.filter(p=>p.t>now-10000);return this.result;
+  }
   if(s.device_id!==m.device_id||s.board_id!==m.board_id)reason='No calibration for this controller.';
   else if(this.lastTelemetry===null||now-this.lastTelemetry>1500||this.lastFrame===null||now-this.lastFrame>1000)reason='Waiting for fresh current data.';
   else if(!s.motor_enabled||s.motion_mode==='stopped')reason='Motor stopped.';
@@ -127,8 +134,8 @@ function mount(document){
  const canvas=document.createElement('canvas');canvas.setAttribute('role','img');canvas.setAttribute('aria-label','Experimental current-based stall pattern similarity over the last ten seconds');
  const summary=document.createElement('p');summary.setAttribute('role','status');
  panel.append(h,note,canvas,summary);const observer=new Observer();
- return {panel,observer,reset(){observer.reset();panel.hidden=true;},receive(d,now){observer.receive(d,now);panel.hidden=observer.state.driver!=='DRV8825';},draw(now){
-  if(panel.hidden)return;const result=observer.evaluate(now);summary.textContent=result.score===null?'Unknown · '+result.reason:(result.score>=MODEL.threshold?'Stall-like current pattern':'Free-running-like current pattern')+' · Similarity '+result.score.toFixed(0)+'/100 · Experimental';
+ return {panel,observer,reset(){observer.reset();panel.hidden=true;},receive(d,now){observer.receive(d,now);panel.hidden=observer.state.driver!=='DRV8825';if(observer.state.capabilities?.current_stall_firmware_supported)note.textContent='Firmware analyzes 100,000 samples/sec per winding before USB export; waveform features use 1,000 Hz bins and USB waveform summaries use 100 Hz bins. Reports only, never stops the motor. Other voltages, speeds or directions are unvalidated extrapolations; logical microstep modes are normalized. Supported analysis range: 4–320 full steps/sec. This score is not a probability.';},draw(now){
+  if(panel.hidden)return;const result=observer.evaluate(now);summary.textContent=(result.firmware?'Firmware · ':'')+(result.score===null?'Unknown · '+result.reason:(result.score>=MODEL.threshold?'Stall-like current pattern':'Free-running-like current pattern')+' · Similarity '+result.score.toFixed(0)+'/100 · '+(result.extrapolated?'Unvalidated extrapolation':'Experimental'));
   const ctx=canvas.getContext('2d'),w=canvas.clientWidth||600,h=180,dpr=root.devicePixelRatio||1;canvas.width=w*dpr;canvas.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
   const left=35,right=w-12,top=12,bottom=h-25,x=t=>left+(t-now+10000)/10000*(right-left),y=v=>bottom-v/100*(bottom-top);
   ctx.font='12px system-ui';ctx.strokeStyle='#334155';ctx.fillStyle='#94a3b8';for(const v of [0,50,100]){ctx.beginPath();ctx.moveTo(left,y(v));ctx.lineTo(right,y(v));ctx.stroke();ctx.fillText(String(v),0,y(v)+4);}

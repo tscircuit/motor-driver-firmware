@@ -7,8 +7,8 @@ class CurrentHistory {
  reset(){this.points=[];this.anchor=null;this.lastBatch=0;this.rate=0;this.dropped=0;this.seen=0;}
  receive(d,now=Date.now()){
   if(d.type==='current_samples'){
-   if(!Array.isArray(d.bins)||!Number.isFinite(d.first_sample_us)||d.window_us!==1000)return;
-   const end=d.first_sample_us/1000+d.bins.length;
+   if(!Array.isArray(d.bins)||!Number.isFinite(d.first_sample_us)||![1000,4000,10000].includes(d.window_us))return;
+   const end=d.first_sample_us/1000+d.bins.length*d.window_us/1000;
    // A reconnect may deliver queued frames from the previous USB session first.
    if(this.anchor!==null&&this.anchor+end>now+250){this.anchor=null;this.points=[];}
    if(this.anchor===null)this.anchor=now-end;
@@ -22,7 +22,7 @@ class CurrentHistory {
     if(!p||p.t!==key){p={t:key,w:[null,null]};this.points.push(p);}
     for(let w=0;w<2;w++){
      const [min,max,sum,count]=bin.slice(w*4,w*4+4);
-     if(!count||count>100||!Number.isFinite(sum)||min<16||max>4079||min>max)continue;
+     if(!count||count>d.window_us/10||!Number.isFinite(sum)||min<16||max>4079||min>max)continue;
      const s=p.w[w]||(p.w[w]={min:Infinity,max:-Infinity,sum:0,count:0});
      s.min=Math.min(s.min,scale(min,voltsPerAmp));s.max=Math.max(s.max,scale(max,voltsPerAmp));
      s.sum+=scale(sum/count,voltsPerAmp)*count;s.count+=count;

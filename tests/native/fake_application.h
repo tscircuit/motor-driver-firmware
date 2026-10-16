@@ -149,3 +149,7 @@ bool motor_test(uint32_t pulses, double hz) {
     return true;
 }
 motor_status_t motor_status(void) { return fake_motor; }
+
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+void current_capture_analyze(void) {}
+#endif

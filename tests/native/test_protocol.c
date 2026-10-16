@@ -29,6 +29,7 @@ int main(void) {
     assert(cJSON_IsFalse(cJSON_GetObjectItem(caps, "torque_count_supported")));
     assert(cJSON_IsFalse(cJSON_GetObjectItem(caps, "stall_detection_supported")));
     assert(strstr(string(caps, "stall_detection_note"), "DRV8825"));
+    assert(cJSON_IsTrue(cJSON_GetObjectItem(caps, "current_stall_firmware_supported")));
     cJSON_Delete(caps);
     output_length = 0;
     status(false);
@@ -37,6 +38,10 @@ int main(void) {
     assert(cJSON_IsNull(cJSON_GetObjectItem(initial, "stall_suspected")));
     assert(cJSON_IsFalse(cJSON_GetObjectItem(initial, "stall_detection_valid")));
     cJSON_Delete(initial);
+    check("{\"cmd\":\"set_current_stream_enabled\",\"enabled\":false}",true);
+    assert(!current_stream_enabled);
+    check("{\"cmd\":\"set_current_stream_enabled\",\"enabled\":1}",false);
+    check("{\"cmd\":\"set_current_stream_enabled\",\"enabled\":true}",true);
     check(START, false); /* No heartbeat. */
     command("{\"cmd\":\"heartbeat\"}");
     check(START, false); /* Safe 5 V startup. */

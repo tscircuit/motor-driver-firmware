@@ -6,10 +6,15 @@
 #include "hardware/sync.h"
 #include "pico/stdlib.h"
 #include <string.h>
-#define RING_WORDS 8192u
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+#include "stall_estimator.h"
+static uint64_t analysis_cursor;
+void current_capture_analyze(void);
+#endif
+#define RING_WORDS 16384u
 /* Multiple of the ring size, so each DMA restart preserves channel parity. */
-#define BLOCK_WORDS 0xffffe000u
-static volatile uint16_t ring[RING_WORDS] __attribute__((aligned(16384)));
+#define BLOCK_WORDS 0xffffc000u
+static volatile uint16_t ring[RING_WORDS] __attribute__((aligned(32768)));
 static int channel;
 static volatile uint64_t completed_words;
 static uint64_t started_us, cursor, dropped;
@@ -41,7 +46,7 @@ void current_capture_init(void) {
     channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
     channel_config_set_read_increment(&c, false);
     channel_config_set_write_increment(&c, true);
-    channel_config_set_ring(&c, true, 14);
+    channel_config_set_ring(&c, true, 15);
     channel_config_set_dreq(&c, DREQ_ADC);
     dma_channel_configure(channel, &c, (void *)ring, &adc_hw->fifo, BLOCK_WORDS, false);
     /* Motor edge counting owns DMA IRQ 0; ADC uses the independent IRQ 1. */
@@ -92,3 +97,15 @@ void current_capture_read(current_frame_t *f, bool connected) {
     f->dropped = dropped;
 }
 void current_capture_drop(unsigned bins) { dropped += bins * CURRENT_BIN_PAIRS; }
+
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+/* Independent of the USB export cursor. Bounded by the DMA ring, with explicit
+   data-loss reporting rather than silently scoring overwritten samples. */
+void current_capture_analyze(void) {
+    uint64_t n=pairs_written();
+    if(!stall_estimator_active()){analysis_cursor=n;return;}
+    if(n-analysis_cursor>RING_WORDS/2-512){stall_estimator_gap(n-analysis_cursor);analysis_cursor=n;return;}
+    uint64_t end=analysis_cursor+1024;if(end>n)end=n;
+    while(analysis_cursor<end){unsigned i=(analysis_cursor*2)&(RING_WORDS-1);stall_estimator_sample(ring[i],ring[i+1],started_us+analysis_cursor*10);analysis_cursor++;}
+}
+#endif

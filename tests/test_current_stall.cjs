@@ -24,3 +24,8 @@ o.receive(active,4200);assert.match(o.evaluate(6200).reason,/fresh current/);
 o.reset();assert.equal(o.points.length,0);assert.equal(o.history.length,0);
 for(const page of ['single-motor','index','gantry']){const html=require('node:fs').readFileSync(`dist/${page}.html`,'utf8');assert(html.indexOf('src="current-stall.js"')<html.indexOf('src="current-chart.js"'));}
 console.log('PASS experimental current stall features, held-out samples, coverage, scope, stopped/startup/fault/stale gates; observer has no motion API');
+
+const native=new Observer();native.receive({...active,capabilities:{current_stall_firmware_supported:true},current_stall_valid:true,current_stall_score:80,current_stall_extrapolated:true},1000);
+assert.equal(native.evaluate(1000).score,80);assert.equal(native.result.firmware,true);assert.equal(native.result.extrapolated,true);
+native.receive({type:'telemetry',motor_enabled:false},1300);assert.equal(native.evaluate(1300).score,null);
+assert.equal(native.evaluate(3000).score,null);
