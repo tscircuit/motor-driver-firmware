@@ -15,6 +15,8 @@ class Jogger {
    if(a.last.sensor_error)return `${label}: temperature sensor fault.`;
    if(a.last.driver_fault_asserted&&!(a.last.capabilities?.fault_stop_mode_supported&&a.last.stop_on_detected_fault===false))return `${label}: driver fault.`;
    if(a.last.thermal_alert||!Number.isFinite(a.last.temperature_c)||a.last.temperature_c>=(a.last.capabilities?.shutdown_c??75))return `${label}: temperature protection is active.`;
+   if(a.last.homing_active)return `${label}: homing in progress.`;
+   if(a.last.homing_required)return `${label}: run stall-based homing to restore saved bounds.`;
    if(a.last.restarting)return `${label}: board is restarting.`;
   }
   return null;
@@ -154,6 +156,7 @@ if(typeof document!=='undefined'){
  const inputKeys=single?{ArrowLeft:['X',-1],ArrowRight:['X',1],ArrowDown:['X',-1],ArrowUp:['X',1]}:keys;
  const labels=single?['X']:['X','Y'];
  const axes=Object.fromEntries(labels.map(label=>[label,new Axis(label)]));const jog=new Jogger(axes,report,()=>Date.now(),inputKeys);let storage;try{storage=window.localStorage;}catch{}const positions=new PositionSlots(axes,jog,report,storage,undefined,single?'single-motor-position-slots-v1':'gantry-position-slots-v1');
+ if(typeof HomingControls!=='undefined')HomingControls.mount(axes,jog,report,document.querySelector('main'));
  for(let i=0;i<3;i++){$('savePosition'+i).onclick=()=>positions.save(i);$('gotoPosition'+i).onclick=()=>void positions.goto(i,Number($('jogSpeed').value),single?$('jogResolution').value:null);}
  for(const label of labels){
   $('setLed'+label).onclick=async()=>{try{await axes[label].send('set_led',{color:$('led'+label).value});await axes[label].send('status');}catch(e){report(e.message);}};
@@ -224,7 +227,7 @@ if(typeof document!=='undefined'){
   renderStepSizes();
   for(const button of document.querySelectorAll('[data-arrow]')){button.disabled=!jog.ready()||jog.stopsPending>0||jog.returning;button.classList.toggle('engaged',jog.held.has(button.dataset.arrow));button.classList.toggle('coasting',jog.states[inputKeys[button.dataset.arrow][0]].braking);}
   for(let i=0;i<3;i++){const slot=positions.slots[i];$('savePosition'+i).disabled=!positions.hasCoordinates()||!positions.idle();$('gotoPosition'+i).disabled=!positions.valid(i)||!positions.idle();$('positionValue'+i).textContent=!slot?'Not saved':positions.hasCoordinates()&&!positions.valid(i)?'Previous board session · save again':labels.map(label=>`${single?'Motor':label} ${Number(slot[label]?.position).toFixed(4)}`).join(' · ')+' full steps';}
-  $('jogPhase').textContent=jog.returning?`GOTO position ${positions.slot+1}…`:jog.phase==='braking'?'Slowing down…':jog.active?'Accelerating / jogging':jog.stopsPending?'Stopping…':jog.ready()?'Ready · press an arrow':jog.unavailableReason();
+  $('jogPhase').textContent=jog.returning?(positions.busy?`GOTO position ${positions.slot+1}…`:'Stall-based homing…'):jog.phase==='braking'?'Slowing down…':jog.active?'Accelerating / jogging':jog.stopsPending?'Stopping…':jog.ready()?'Ready · press an arrow':jog.unavailableReason();
   $('brakeEstimate').textContent=`Release can add up to ${Math.max(1,Math.ceil(Number($('jogSpeed').value)*0.2))} ${stepUnit($('jogResolution').value)} of deceleration, plus USB/input latency. Space/Escape stops immediately.`;
   for(const label of labels){renderHardware(label);const a=axes[label];$('connect'+label).textContent=a.port?'Disconnect '+(single?'motor':label):'Connect '+(single?'motor':label);$('beep'+label).disabled=!a.port||Date.now()-a.seen>1000;$('rename'+label).disabled=!a.port||Date.now()-a.seen>1000||!a.last?.usb_name_supported||a.last?.motor_enabled;}
  }

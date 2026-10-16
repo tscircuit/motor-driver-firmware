@@ -18,5 +18,8 @@ const send=async(cmd,fields)=>calls.push({cmd,fields});
  delay.value='-1';await apply.click();assert.equal(calls.length,2);
  api.receive('X',{...d,motor_enabled:true,motion_mode:'continuous'},send);assert.equal(apply.disabled,true);assert.equal(beep.disabled,true);
  api.receive('X',d,send);api.disconnect('X');assert.equal(apply.disabled,true);
+ api.receive('Y',{...d,capabilities:{stall_response_supported:true,stall_sensitivity_supported:true},stall_sensitivity:70},send);
+ const slider=nodes.filter(n=>n.type==='range').at(-1);assert.equal(slider.value,'70');
+ slider.value='80';slider.input();const button=nodes.filter(n=>n.tag==='button').at(-1);await button.click();assert.equal(calls.at(-3).cmd,'set_stall_sensitivity');assert.equal(calls.at(-3).fields.sensitivity,80);
  console.log('PASS stall controls: capability gating, defaults, command values, editing, movement and disconnect');
 })().catch(e=>{console.error(e);process.exitCode=1;});

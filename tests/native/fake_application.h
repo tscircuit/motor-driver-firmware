@@ -7,7 +7,7 @@ char output[32768];
 size_t output_length;
 static uint8_t selected_register;
 static motor_status_t fake_motor = {.mode = STOPPED, .factor = 1};
-settings_t settings = {.name = "Native test", .threshold = 65};
+settings_t settings = {.name = "Native test", .threshold = 65, .stall_sensitivity = 35};
 uint64_t time_us_64(void) { return fake_us; }
 void sleep_us(uint32_t us) { fake_us += us; }
 void sleep_ms(uint32_t ms) { fake_us += ms * 1000; }
@@ -95,6 +95,14 @@ bool settings_save(const settings_t *next) {
     settings = *next;
     return true;
 }
+#ifndef MOTOR_BOARD_DRV8847
+static bool fake_limits_enabled;
+static int64_t fake_limit_max;
+bool motor_set_travel_limits(bool enabled, int64_t min, int64_t max) {
+    (void)min; fake_limits_enabled=enabled; fake_limit_max=max; return true;
+}
+bool motor_set_position(int64_t p) { fake_motor.position_microsteps=p; return true; }
+#endif
 void motor_init(void) {}
 void motor_stop(void) {
     fake_motor.mode = STOPPED;
@@ -110,7 +118,8 @@ bool motor_start(int factor, int direction, double speed, double acceleration, u
     assert(nema23_status().spi_valid && fake_pins[6] && fake_pins[0]);
     gpio_put(22, 1);
 #endif
-    fake_motor = (motor_status_t){.mode = defer   ? PREPARED
+    int64_t saved_position=fake_motor.position_microsteps;
+    fake_motor = (motor_status_t){.position_microsteps=saved_position, .mode = defer   ? PREPARED
                                           : steps ? FINITE
                                                   : CONTINUOUS,
                                   .factor = factor,

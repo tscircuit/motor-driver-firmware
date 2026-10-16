@@ -181,3 +181,11 @@ function updateHardware(){
 }
 $('applyLed').addEventListener('click',async()=>{try{await send('set_led',{color:$('ledColor').value});await send('status');message('LED color applied. Alarms take priority.');}catch(e){message(e.message);}});
 $('applyPd').addEventListener('click',async()=>{try{await send('set_pd_voltage',{voltage:Number($('pdVoltage').value)});await send('status');message(caps().power_arm_required?'Voltage requested. Use Enable motor power to connect the rail.':'Motor voltage requested. Wait two seconds for settling.');}catch(e){message(e.message);}});
+
+// Reuse the same one-axis homing procedure on the full motor dashboard.
+if(typeof HomingControls!=='undefined'){
+ const homingJog={generation:0,returning:false,async stop(reason){this.generation++;this.returning=false;if(port)await send('stop');if(reason)message(reason);}};
+ const motor={get port(){return port;},get last(){return last;},get seen(){return lastSeen;},send};
+ HomingControls.mount({Motor:motor},homingJog,message,document.querySelector('main'));
+ $('stop').addEventListener('click',()=>{homingJog.generation++;});
+}
