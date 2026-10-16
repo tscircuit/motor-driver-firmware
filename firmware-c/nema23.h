@@ -2,12 +2,10 @@
 #define NEMA23_H
 #include <stdbool.h>
 #include <stdint.h>
-#define NEMA23_DISCHARGE_US 12000000u
 #define NEMA23_FULL_SCALE_A (3.3 * 10000.0 / 12610.0 / 0.66)
 typedef enum {
     POWER_OFF,
-    POWER_DISCHARGE,
-    POWER_NEGOTIATING,
+    POWER_REQUESTING,
     POWER_CONTRACT,
     POWER_ENERGIZING,
     POWER_READY,

@@ -281,12 +281,12 @@ static cJSON *capabilities(void) {
     add_bool(c, "current_limit_supported", true);
     add_number(c, "current_limit_min_a", 0.1);
     add_number(c, "current_limit_max_a", NEMA23_FULL_SCALE_A);
-    add_number(c, "pd_settle_ms", 14000);
+    add_number(c, "pd_settle_ms", 0);
     add_number(c, "current_foldback_c", 60);
     add_string(
         c, "power_note",
-        "Request voltage, wait for settling, then arm motor power below 55 C. PD status is informational. Voltage changes "
-        "discharge for 12 seconds. Current changes require rearming but no discharge delay. The raw PD input defaults to 28 V; it is isolated at boot. "
+        "Request voltage, then arm motor power below 55 C. PD status is informational. "
+        "Voltage requests and rearming have no fixed discharge or settling delay. The raw PD input defaults to 28 V; it is isolated at boot. "
         "PD power-good is ignored by default; PD communication and driver/eFuse checks remain "
         "active.");
 #else
@@ -433,7 +433,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.8");
+        add_string(o, "firmware_version", "1.0.9");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
