@@ -74,3 +74,11 @@ widget.receive('Y',{type:'telemetry',capabilities:{stall_detection_supported:tru
 assert.equal(plots[1].find(n=>n.className==='stallPlot').hidden,false);assert.match(plots[1].find(n=>n.className==='stallPlot').children.at(-1).textContent,/Stall suspected/);
 widget.receive('Y',{type:'telemetry',hardware_motion_inhibited:true,stall_detection_valid:false});tick(600);assert.match(plots[1].find(n=>n.className==='stallPlot').children.at(-1).textContent,/unknown.*interlock/);
 widget.disconnect('Y');tick(700);assert.match(plots[1].find(n=>n.className==='stallPlot').children.at(-1).textContent,/waiting for telemetry/);
+
+widget.reset('Y');
+widget.receive('Y',{type:'telemetry',driver:'DRV8825',current_available:true,capabilities:{stall_detection_supported:false,torque_count_supported:false,stall_detection_note:'DRV8825 does not provide torque count or sensorless stall detection.'},stall_detection_valid:false,stall_torque_count:null,stall_suspected:null});
+assert.equal(plots[1].find(n=>n.className==='stallPlot').hidden,true);
+assert.equal(cards[1].descendants().find(n=>n.className==='stallUnavailable').hidden,false);
+assert.match(cards[1].descendants().find(n=>n.className==='stallUnavailable').textContent,/DRV8825.*does not provide torque count/);
+assert.equal(plots[1].find(n=>n.className==='windingPlot').hidden,false);
+widget.reset('Y');assert.equal(cards[1].descendants().find(n=>n.className==='stallUnavailable').hidden,true);

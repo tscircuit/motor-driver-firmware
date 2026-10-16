@@ -136,13 +136,18 @@ function mount(card){
  const stallPanel=node('section','stallPlot'),stallCanvas=node('canvas'),stallSummary=node('p');stallPanel.hidden=true;
  stallCanvas.setAttribute('aria-label',`${heading.textContent}: stall torque count over the last ten seconds`);stallCanvas.setAttribute('role','img');
  stallPanel.append(node('h4',null,'Stall detector · torque count'),node('div','stallLegend','Torque count · dashed line: detection threshold'),stallCanvas,stallSummary);
- plots.append(temperaturePanel,currentPanel,stallPanel);card.append(plots,unavailable);
- return {canvas,summary,temperatureCanvas,temperatureSummary,currentPanel,unavailable,history:new CurrentHistory(),temperatureHistory:new TemperatureHistory(),currentSupported:null,stallPanel,stallCanvas,stallSummary,stallHistory:new StallHistory()};
+ const stallUnavailable=node('p','stallUnavailable');stallUnavailable.hidden=true;
+ plots.append(temperaturePanel,currentPanel,stallPanel);card.append(plots,unavailable,stallUnavailable);
+ return {canvas,summary,temperatureCanvas,temperatureSummary,currentPanel,unavailable,history:new CurrentHistory(),temperatureHistory:new TemperatureHistory(),currentSupported:null,stallUnavailable,stallPanel,stallCanvas,stallSummary,stallHistory:new StallHistory()};
 }
 function receive(chart,d,now=Date.now()){
  if(!chart)return;
  chart.history.receive(d,now);chart.temperatureHistory.receive(d,now);chart.stallHistory.receive(d,now);
- if(d.capabilities)chart.stallPanel.hidden=!d.capabilities.stall_detection_supported;
+ if(d.capabilities){
+  chart.stallPanel.hidden=!d.capabilities.stall_detection_supported;
+  chart.stallUnavailable.textContent=d.capabilities.stall_detection_note||'';
+  chart.stallUnavailable.hidden=!d.capabilities.stall_detection_note;
+ }
  if(d.type==='current_samples')chart.currentSupported=true;
  if(d.type==='telemetry'&&Object.hasOwn(d,'current_available')){
   if(d.current_available||Array.isArray(d.winding_current_a))chart.currentSupported=true;
@@ -152,7 +157,7 @@ function receive(chart,d,now=Date.now()){
 }
 const api={CurrentHistory,TemperatureHistory,StallHistory,
  receive:(axis,d)=>receive(charts.get(axis),d),
- reset:axis=>{const c=charts.get(axis);if(c){c.history.reset();c.temperatureHistory.reset();c.stallHistory.reset();c.stallPanel.hidden=true;c.currentSupported=null;c.currentPanel.hidden=false;c.unavailable.hidden=true;}},
+ reset:axis=>{const c=charts.get(axis);if(c){c.history.reset();c.temperatureHistory.reset();c.stallHistory.reset();c.stallPanel.hidden=true;c.stallUnavailable.hidden=true;c.stallUnavailable.textContent='';c.currentSupported=null;c.currentPanel.hidden=false;c.unavailable.hidden=true;}},
  disconnect:axis=>{const c=charts.get(axis);if(c){c.history.seen=0;c.temperatureHistory.seen=0;c.stallHistory.seen=0;}}};
 if(typeof module!=='undefined')module.exports=api;
 if(root.document){
