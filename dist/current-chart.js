@@ -7,7 +7,7 @@ class CurrentHistory {
  reset(){this.points=[];this.anchor=null;this.lastBatch=0;this.rate=0;this.dropped=0;this.seen=0;}
  receive(d,now=Date.now()){
   if(d.type==='current_samples'){
-   if(!Array.isArray(d.bins)||!Number.isFinite(d.first_sample_us)||![1000,4000].includes(d.window_us))return;
+   if(!Array.isArray(d.bins)||!Number.isFinite(d.first_sample_us)||![1000,4000,10000].includes(d.window_us))return;
    const end=d.first_sample_us/1000+d.bins.length*d.window_us/1000;
    // A reconnect may deliver queued frames from the previous USB session first.
    if(this.anchor!==null&&this.anchor+end>now+250){this.anchor=null;this.points=[];}

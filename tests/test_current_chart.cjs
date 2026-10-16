@@ -92,3 +92,5 @@ widget.reset('Y');assert.equal(cards[1].descendants().find(n=>n.className==='cur
 const grouped=new CurrentHistory();grouped.receive({type:'current_samples',first_sample_us:0,window_us:4000,sample_rate_hz:100000,current_volts_per_amp:1,bins:[[1000,3000,800000,400,1000,3000,800000,400],[1000,3000,800000,400,1000,3000,800000,400]]},10000);
 assert.equal(grouped.points.reduce((n,p)=>n+(p.w[0]?.count||0),0),800);
 assert(grouped.points.every(p=>p.t<=10000));
+
+const coarse=new CurrentHistory();coarse.receive({type:'current_samples',first_sample_us:0,window_us:10000,sample_rate_hz:100000,current_volts_per_amp:1,bins:[[1000,3000,2000000,1000,1000,3000,2000000,1000]]},10000);assert.equal(coarse.points[0].w[0].count,1000);

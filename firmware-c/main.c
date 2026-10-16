@@ -241,7 +241,7 @@ static void stream_current(void) {
 #ifdef MOTOR_BOARD_DRV8452
     const unsigned group=1;
 #else
-    const unsigned group=4;
+    const unsigned group=10;
 #endif
     unsigned complete=frame.count/group*group;
     if(frame.count>complete)current_capture_drop(frame.count-complete);
