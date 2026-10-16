@@ -30,5 +30,30 @@ int main(void){
  for(unsigned j=0;j<2048;j++){stall_estimator_evaluate(now);}
  r=stall_estimator_result();assert(r.analyzed==150000&&r.dropped==0&&r.valid);
  stall_estimator_sample(0,2048,now);assert(!stall_estimator_result().valid&&stall_estimator_result().dropped==1);
+ /* Diagnostic download retains exact millisecond bins only after motion ends.
+    It must not make the stopped estimate valid or expose a changing buffer. */
+ c.moving=false;stall_estimator_context(c,now);
+ assert(stall_estimator_trace_begin());
+ c.moving=true;stall_estimator_context(c,now);
+ assert(!stall_estimator_trace_begin());
+ feed(free_samples,1500);
+ float values[4];uint64_t at;
+ assert(stall_estimator_trace_count()==0);
+ assert(!stall_estimator_trace_bin(0,values,&at));
+ c.profile_speed=10;stall_estimator_context(c,now);
+ assert(!stall_estimator_active());
+ stall_estimator_context(c,now+1000);
+ c.moving=false;stall_estimator_context(c,now);
+ assert(stall_estimator_trace_count()==1500&&!stall_estimator_result().valid);
+ assert(stall_estimator_trace_bin(1499,values,&at)&&at==now-1000);
+ assert(fabsf(values[0]-free_samples[499][0])<1e-6f);
+ stall_estimator_context(c,now+1000);
+ assert(stall_estimator_trace_count()==1500);
+ assert(!stall_estimator_trace_bin(1500,values,&at));
+ c.moving=true;c.profile_speed=c.speed;stall_estimator_context(c,now);
+ feed(free_samples,5000);c.moving=false;stall_estimator_context(c,now);
+ assert(stall_estimator_trace_count()==STALL_HISTORY);
+ assert(stall_estimator_trace_bin(0,values,&at)&&at==now-STALL_HISTORY*1000);
+ assert(stall_estimator_trace_begin()&&stall_estimator_trace_count()==0);
  puts("PASS native current estimator: recorded classes, resolution normalization, extrapolation, raw 100 kHz accounting, stopped/fault/data-gap and bandwidth gates");
 }

@@ -481,7 +481,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.11");
+        add_string(o, "firmware_version", "1.0.12");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -722,6 +722,38 @@ static void command(const char *line) {
             previous_mode = BRAKING;
         } else if (s.mode != STOPPED && s.mode != BRAKING)
             error = "Deceleration requires continuous motion";
+    } else if(matches(cmd,"begin_stall_trace") || matches(cmd,"get_stall_trace")) {
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+        if(s.mode!=STOPPED)error="Stop motor before accessing stall trace";
+        else if(matches(cmd,"begin_stall_trace")) {
+            if(!stall_estimator_trace_begin())error="Stop motor before accessing stall trace";
+        } else {
+            double offset;
+            unsigned count=stall_estimator_trace_count();
+            if(!number(c,"offset",&offset)||offset<0||offset>count||floor(offset)!=offset)
+                error="Provide an integer trace offset within the recording";
+            else {
+                cJSON *o=cJSON_CreateObject(),*rows=cJSON_CreateArray();
+                add_string(o,"type","stall_trace");
+                if(id)cJSON_AddItemToObject(o,"id",cJSON_Duplicate(id,true));
+                add_number(o,"offset",offset);add_number(o,"total",count);
+                add_number(o,"device_time_us",(double)time_us_64());
+                add_number(o,"sample_hz",STALL_FEATURE_HZ);
+                for(unsigned i=(unsigned)offset;i<count&&i<(unsigned)offset+16;i++) {
+                    float values[4];uint64_t at;
+                    if(!stall_estimator_trace_bin(i,values,&at))break;
+                    cJSON *row=cJSON_CreateArray();
+                    cJSON_AddItemToArray(row,cJSON_CreateNumber((double)at));
+                    for(unsigned j=0;j<4;j++)cJSON_AddItemToArray(row,cJSON_CreateNumber(values[j]));
+                    cJSON_AddItemToArray(rows,row);
+                }
+                cJSON_AddItemToObject(o,"bins",rows);
+                if(!emit(o))error="USB busy; retry trace request";
+            }
+        }
+#else
+        error="Board does not support this command";
+#endif
     } else if(matches(cmd,"set_current_stream_enabled")) {
 #if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
         cJSON *enabled=cJSON_GetObjectItemCaseSensitive(c,"enabled");
