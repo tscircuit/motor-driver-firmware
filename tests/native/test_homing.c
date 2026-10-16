@@ -11,6 +11,12 @@ static const char *begin(void) {
 int main(void) {
  safe_gpio();sensor_initialized=true;sample();strcpy(device_id,"e66568714f117e21");
  pd_voltage=9;power_at=0;heartbeat_seen=true;heartbeat_us=fake_us;
+ /* Both production controllers and another unit use the same board-family model. */
+ const char *ids[]={"e66568714f538921","e66568714f117e21","0123456789abcdef"};
+ for(unsigned i=0;i<3;i++){
+  strcpy(device_id,ids[i]);assert(!begin());assert(home.active&&home.phase==1);
+  stop("Identity gate test complete");
+ }
  assert(!begin());assert(home.active&&home.phase==1&&fake_motor.direction==-1);
  homing_tick(fake_us,true,true,100);fake_us+=100001;homing_tick(fake_us,true,true,100);
  assert(home.phase==2&&fake_motor.direction==1);

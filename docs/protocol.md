@@ -176,3 +176,13 @@ The single-axis and XY pages offer **Run Stall-based Homing**. XY homes connecte
 controllers sequentially, aborting the batch on a failed/disconnected axis.
 The general single-controller dashboard uses the same runner. No homing is
 automatically run by loading the page or installing firmware.
+
+## Shared default model (1.0.17)
+
+All native DRV8825-family controllers initialize the shared current-pattern model;
+there is no serial-number allowlist for estimation or homing. The training set
+still comes from the original motor and is not evidence of independent validation
+on every motor. `current_stall_model_scope` is `shared-default`. Per-controller
+sensitivity remains saved locally. The default homing operating points remain
+9 V at 25, 60 or 100 full steps/sec. Hardware profiles without this current
+estimator do not gain it merely by sharing a USB name.

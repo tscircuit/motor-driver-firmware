@@ -6,7 +6,7 @@
 static float bins[STALL_HISTORY][4], window[STALL_MAX_WINDOW][4];
 static unsigned head, available;
 static uint64_t last_bin, stable_since, last_evaluation;
-static bool calibrated, job_active, trace_capture, trace_frozen, steady;
+static bool job_active, trace_capture, trace_frozen, steady;
 static stall_context_t context;
 static stall_result_t result;
 static uint32_t raw_count, sum[2], low[2], high[2];
@@ -25,8 +25,8 @@ static void clear_window(void) {
     job_active=false; head=available=raw_count=0; last_bin=bin_start=0;
     memset(sum,0,sizeof(sum)); memset(square,0,sizeof(square));
 }
-void stall_estimator_init(bool device) {
-    calibrated=device; trace_capture=trace_frozen=steady=false;
+void stall_estimator_init(void) {
+    trace_capture=trace_frozen=steady=false;
     context=(stall_context_t){0};
     result=(stall_result_t){.reason="Motor stopped",.state="unknown"};
     stable_since=last_evaluation=0; clear_window();
@@ -160,9 +160,8 @@ void stall_estimator_evaluate(uint64_t now) {
         estimate.window_end_us=job.end_us; estimate.computed_at_us=now; estimate.ripple_rms=sqrtf((float)(job.variance/job.n));
         result=estimate; return;
     }
-    if(!calibrated || !context.moving || !context.healthy || !steady) {
+    if(!context.moving || !context.healthy || !steady) {
         result.valid=false; result.state="unknown";
-        if(!calibrated) result.reason="No calibration for this motor";
         return;
     }
     if(now-last_evaluation<STALL_EVALUATION_US) return;

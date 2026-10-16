@@ -15,7 +15,8 @@ typedef struct {
     uint32_t window_ms, compute_max_us;
     const char *reason, *state;
 } stall_result_t;
-void stall_estimator_init(bool calibrated_device);
+/* Shared default for the supported DRV8825 board family; no serial-number gate. */
+void stall_estimator_init(void);
 void stall_estimator_context(stall_context_t context, uint64_t now);
 void stall_estimator_sample(uint16_t a, uint16_t b, uint64_t sample_us);
 void stall_estimator_gap(uint64_t count);
