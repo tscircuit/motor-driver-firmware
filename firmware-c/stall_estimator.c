@@ -18,7 +18,7 @@ void stall_estimator_context(stall_context_t c,uint64_t now){
  bool changed=c.moving!=context.moving||c.voltage!=context.voltage||c.direction!=context.direction||c.factor!=context.factor||fabsf(c.speed-context.speed)>.001f;
  context=c;
  bool steady=c.moving&&c.healthy&&c.factor>0&&fabsf(c.profile_speed-c.speed)<=fmaxf(.01f,c.speed*.05f);
- if(changed&&c.moving)trace_frozen=false;
+ if(changed&&c.moving){trace_frozen=false;clear_window();}
  if(trace_capture&&!steady&&available>=100)trace_frozen=true;
  if(changed||!steady){
   /* Preserve samples for post-run download, without running the estimator on
