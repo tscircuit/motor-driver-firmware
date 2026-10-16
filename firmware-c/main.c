@@ -271,6 +271,8 @@ static cJSON *capabilities(void) {
 #ifdef MOTOR_BOARD_DRV8452
     int volts[] = {5, 9, 12, 15, 20, 28};
     add_bool(c, "power_arm_required", true);
+    add_bool(c, "fault_stop_mode_supported", true);
+    add_bool(c, "stall_detection_supported", true);
     add_bool(c, "pd_power_good_override_supported", true);
     add_bool(c, "fuse_power_fault_override_supported", true);
     add_bool(c, "overcurrent_shutdown_override_supported", true);
@@ -364,7 +366,7 @@ static void status(bool compact) {
 #ifdef MOTOR_BOARD_DRV8847
              !gpio_get(ALERT_PIN)
 #elif defined(MOTOR_BOARD_DRV8452)
-             nema23_status().phase == POWER_LATCHED || (power_ready() && !gpio_get(24))
+             temperature_valid && temperature >= SHUTDOWN_C
 #else
              false
 #endif
@@ -402,6 +404,14 @@ static void status(bool compact) {
     add_bool(o, "power_fault_asserted", !gpio_get(2));
     add_bool(o, "fuse_power_fault_override", board.ignore_fuse_power_fault);
     add_bool(o, "overcurrent_shutdown_override", board.ignore_overcurrent_shutdown);
+    add_bool(o, "stop_on_detected_fault", board.stop_on_fault);
+    add_string(o, "reported_fault", board.warning ? board.warning : "");
+    add_bool(o, "hardware_motion_inhibited", board.phase == POWER_READY && !gpio_get(24));
+    add_bool(o, "stall_detection_valid", board.stall_valid);
+    add_bool(o, "stall_suspected", board.stall_valid && board.stall_suspected);
+    add_number(o, "stall_threshold", board.stall_threshold);
+    if (board.stall_valid) add_number(o, "stall_torque_count", board.stall_torque_count);
+    else null(o, "stall_torque_count");
     add_bool(o, "winding_current_limit_override", board.ignore_winding_current_limit);
     add_number(o, "effective_current_peak_a", nema23_effective_current());
     add_number(o, "driver_fault_register", board.driver_faults);
@@ -422,7 +432,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.5");
+        add_string(o, "firmware_version", "1.0.6");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -683,13 +693,16 @@ static void command(const char *line) {
     } else if (matches(cmd, "set_pd_power_good_override") ||
                matches(cmd, "set_fuse_power_fault_override") ||
                matches(cmd, "set_overcurrent_shutdown_override") ||
-               matches(cmd, "set_winding_current_limit_override")) {
+               matches(cmd, "set_winding_current_limit_override") ||
+               matches(cmd, "set_stop_on_detected_fault")) {
 #ifdef MOTOR_BOARD_DRV8452
         cJSON *enabled = cJSON_GetObjectItemCaseSensitive(c, "enabled");
         if (s.mode != STOPPED || restart_at)
             error = "Stop motor first";
         else if (!cJSON_IsBool(enabled))
             error = "enabled must be a boolean";
+        else if (matches(cmd, "set_stop_on_detected_fault"))
+            nema23_set_fault_stop(cJSON_IsTrue(enabled));
         else if (matches(cmd, "set_overcurrent_shutdown_override"))
             nema23_set_overcurrent_override(cJSON_IsTrue(enabled));
         else if (matches(cmd, "set_winding_current_limit_override"))
@@ -705,6 +718,16 @@ static void command(const char *line) {
 #ifdef MOTOR_BOARD_DRV8452
         stop("Motor power disarmed");
         nema23_disarm();
+#else
+        error = "Board does not support this command";
+#endif
+    } else if (matches(cmd, "set_stall_threshold")) {
+#ifdef MOTOR_BOARD_DRV8452
+        double threshold;
+        if (s.mode != STOPPED || restart_at) error = "Stop motor first";
+        else if (!number(c, "threshold", &threshold) || threshold < 1 || threshold > 4095 || floor(threshold) != threshold)
+            error = "Stall threshold must be an integer from 1-4095";
+        else error = nema23_set_stall_threshold((unsigned)threshold);
 #else
         error = "Board does not support this command";
 #endif
@@ -856,6 +879,9 @@ static void command(const char *line) {
 }
 static void protect(uint64_t now, motor_status_t s) {
 #ifdef MOTOR_BOARD_DRV8452
+    nema23_observe_motion(s.enabled && (s.mode == CONTINUOUS || s.mode == FINITE) &&
+                          fabs(s.profile_speed - s.speed) <= s.speed * 0.1,
+                          s.executed_pulses);
     nema23_poll(now, temperature_valid, temperature);
     if (nema23_status().phase == POWER_LATCHED) {
         stop(nema23_status().fault);

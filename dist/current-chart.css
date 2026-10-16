@@ -2,3 +2,5 @@
 
 .sensorPlots{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:20px}.sensorPlots>section{min-width:0}.sensorPlots h4{font-size:13px;font-weight:600;margin:8px 0}.temperaturePlot h4{color:#75efd0}.currentUnavailable{padding-top:12px;border-top:1px solid #334155}.sensorPlots [hidden],.currentChart [hidden]{display:none}
 .temperatureLegend{font-size:12px;color:#75efd0}.temperatureLegend span{color:#fb7185;margin-left:16px}
+
+.stallPlot h4,.stallLegend{color:#c4b5fd}.stallLegend{font-size:12px}

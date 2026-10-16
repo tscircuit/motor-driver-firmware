@@ -50,7 +50,7 @@ widget.receive('X',{type:'telemetry',temperature_c:25,threshold_c:55,current_ava
 widget.receive('Y',{type:'telemetry',temperature_c:28,current_available:true,winding_current_a:[.3,-.4],capabilities:{current_stream_supported:true}});
 tick(100);
 const plots=cards.map(c=>c.descendants());
-assert.equal(plots[0].filter(n=>n.tag==='canvas').length,2);
+assert.equal(plots[0].filter(n=>n.tag==='canvas').length,3);
 assert.ok(plots[0].find(n=>n.className==='windingPlot').hidden);
 assert.equal(plots[0].find(n=>n.className==='currentUnavailable').hidden,false);
 assert.match(plots[0].find(n=>Object.hasOwn(n.attributes,'data-temperature-summary')).textContent,/25.0 °C.*Live temperature.*55 °C/);
@@ -65,3 +65,12 @@ assert.match(plots[0].find(n=>Object.hasOwn(n.attributes,'data-temperature-summa
 assert.equal(plots[0].find(n=>n.className==='windingPlot').hidden,false);
 for(const file of ['index.html','single-motor.html','gantry.html'])assert.match(fs.readFileSync('dist/'+file,'utf8'),/temperature &amp; current<\/h3>/);
 console.log('PASS shared sensor widget: temperature without current, missing-sample gaps, compact telemetry, independent axes, mounting, disconnect and reconnect');
+
+const {StallHistory}=require('../dist/current-chart.js');const st=new StallHistory();
+st.receive({type:'telemetry',stall_detection_valid:true,stall_torque_count:100,stall_threshold:3},10000);
+st.receive({type:'telemetry',stall_detection_valid:false,stall_torque_count:0,stall_threshold:3},10250);
+assert.deepEqual(st.points.map(p=>p.value),[100,null]);
+widget.receive('Y',{type:'telemetry',capabilities:{stall_detection_supported:true},stall_detection_valid:true,stall_torque_count:0,stall_suspected:true,stall_threshold:3});tick(500);
+assert.equal(plots[1].find(n=>n.className==='stallPlot').hidden,false);assert.match(plots[1].find(n=>n.className==='stallPlot').children.at(-1).textContent,/Stall suspected/);
+widget.receive('Y',{type:'telemetry',hardware_motion_inhibited:true,stall_detection_valid:false});tick(600);assert.match(plots[1].find(n=>n.className==='stallPlot').children.at(-1).textContent,/unknown.*interlock/);
+widget.disconnect('Y');tick(700);assert.match(plots[1].find(n=>n.className==='stallPlot').children.at(-1).textContent,/waiting for telemetry/);

@@ -77,6 +77,8 @@ static void setup(void) {
     safe_gpio();
     nema23_init();
     assert(nema23_status().ignore_pd_power_good);
+    assert(!nema23_status().stop_on_fault);
+    nema23_set_fault_stop(true);
     nema23_set_pg_override(false); /* Exercise optional strict mode below. */
     sensor_initialized = true;
     fake_registers[1] = SENSOR_CONFIG;
@@ -185,7 +187,78 @@ static void test_current_overrides(void) {
     setup();
     assert(!nema23_status().ignore_overcurrent_shutdown && !nema23_status().ignore_winding_current_limit);
 }
+static void start_observer(void) {
+    setup();
+    nema23_set_fault_stop(false);
+    request20();
+    arm();
+    assert(spi_regs[6] == 0x3c && spi_regs[7] == 0x45);
+    assert(spi_regs[8] == 0 && spi_regs[9] == 0x20);
+    assert(!nema23_prepare_motion());
+    fake_pins[22] = 1;
+    nema23_observe_motion(true, 128);
+    fake_us += 25000;
+    nema23_poll(fake_us, true, 25);
+    assert(spi_regs[7] == 0x55 && !nema23_status().stall_valid);
+    nema23_observe_motion(true, 256);
+}
+static void test_reporting_mode(void) {
+    setup();
+    nema23_set_fault_stop(false);
+    check("{\"cmd\":\"set_stop_on_detected_fault\",\"enabled\":1}", false);
+    check("{\"cmd\":\"set_stall_threshold\",\"threshold\":0}", false);
+    check("{\"cmd\":\"set_stall_threshold\",\"threshold\":3.5}", false);
+    check("{\"cmd\":\"set_stall_threshold\",\"threshold\":50}", true);
+    assert(nema23_status().stall_threshold == 50);
+    start_observer();
+    spi_regs[0x0a] = 100;
+    fake_us += 25000;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_status().stall_valid && !nema23_status().stall_suspected);
+    spi_regs[0x0a] = 0;
+    for (int i = 0; i < 10; ++i) {
+        fake_us += 25000;
+        nema23_poll(fake_us, true, 25);
+    }
+    assert(nema23_status().stall_suspected && nema23_ready() && fake_pins[0] && fake_pins[22]);
+    spi_regs[0x0a] = 100;
+    fake_us += 25000;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_status().stall_valid && !nema23_status().stall_suspected);
+    fake_pins[24] = 0;
+    fake_us += 25000;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_ready() && fake_pins[0] && fake_pins[22]);
+    assert(nema23_status().warning && !nema23_status().stall_valid && !nema23_status().stall_suspected);
+    fake_pins[24] = 1;
+    fake_pins[23] = 0;
+    spi_regs[0] = 0x88;
+    fake_us += 25000;
+    nema23_poll(fake_us, true, 25);
+    assert(nema23_ready() && !nema23_driver_fault() && nema23_status().warning);
+    assert(!nema23_status().stall_valid);
+    fake_pins[23] = 1;
+    spi_regs[0] = 0;
+    nema23_poll(fake_us, true, 70);
+    assert(nema23_status().phase == POWER_LATCHED && !fake_pins[0]);
+    start_observer();
+    /* Exercise stop policy without changing hardware during motion. */
+    nema23_set_fault_stop(true);
+    request20();arm();assert(!nema23_prepare_motion());fake_pins[22] = 1;
+    nema23_observe_motion(true,128);fake_us+=25000;nema23_poll(fake_us,true,25);
+    nema23_observe_motion(true,256);spi_regs[0x0a]=0;
+    for(int i=0;i<10 && nema23_ready();++i){fake_us+=25000;nema23_poll(fake_us,true,25);}
+    assert(nema23_status().phase == POWER_LATCHED && !fake_pins[0] && !fake_pins[22]);
+    assert(strstr(nema23_status().fault,"Suspected motor stall"));
+    start_observer();
+    spi_broken=true;fake_us+=25000;nema23_poll(fake_us,true,25);
+    assert(!nema23_status().stall_valid && !nema23_status().stall_suspected);
+    nema23_observe_motion(false,0);
+    assert(!nema23_status().stall_valid);
+    setup();
+}
 int main(void) {
+    test_reporting_mode();
     test_current_overrides();
     setup();
     nema23_set_pg_override(true);
@@ -245,7 +318,7 @@ int main(void) {
     fake_pins[24] = 0;
     nema23_poll(fake_us, true, 25);
     assert(!nema23_ready() && !fake_pins[0]);
-    assert(strstr(nema23_status().fault, "interlock dropped"));
+    assert(strstr(nema23_status().fault, "interlock active"));
     assert(nema23_status().fault_snapshot_valid);
     assert(!(nema23_status().fault_gpio & (1u << 24)));
     assert(nema23_status().fault_gpio & (1u << 23));
