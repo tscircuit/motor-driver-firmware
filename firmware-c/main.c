@@ -23,6 +23,10 @@
 #ifdef MOTOR_BOARD_DRV8452
 #include "nema23.h"
 #endif
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+#include "stall_estimator.h"
+static bool current_stream_enabled=true;
+#endif
 #include "motor.h"
 #include "settings.h"
 #include "vendor/cJSON.h"
@@ -267,6 +271,12 @@ static cJSON *capabilities(void) {
     add_bool(c, "torque_count_supported", true);
 #else
     add_bool(c, "torque_count_supported", false);
+#ifndef MOTOR_BOARD_DRV8847
+    add_bool(c, "current_stall_firmware_supported", true);
+    add_number(c, "current_stall_raw_sample_hz", CURRENT_SAMPLE_HZ);
+    add_number(c, "current_stall_feature_hz", STALL_FEATURE_HZ);
+    add_bool(c, "current_stream_toggle_supported", true);
+#endif
     add_bool(c, "stall_detection_supported", false);
     add_string(c, "stall_detection_note", DRIVER_NAME " does not provide torque count or sensorless stall detection. Winding current and electrical faults do not confirm a stalled shaft.");
 #endif
@@ -437,6 +447,21 @@ static void status(bool compact) {
     add_bool(o, "driver_spi_verified", board.spi_valid && gpio_get(WAKE_PIN));
 #endif
 #ifndef MOTOR_BOARD_DRV8452
+#ifndef MOTOR_BOARD_DRV8847
+    stall_result_t estimate=stall_estimator_result();
+    estimate.valid=estimate.valid&&s.enabled&&(s.mode==FINITE||s.mode==CONTINUOUS);
+    add_bool(o,"current_stall_valid",estimate.valid);
+    if(estimate.valid)add_number(o,"current_stall_score",estimate.score);else null(o,"current_stall_score");
+    add_bool(o,"current_stall_extrapolated",estimate.extrapolated);
+    add_bool(o,"current_stall_outlier",estimate.outlier);
+    add_string(o,"current_stall_reason",estimate.reason?estimate.reason:"");
+    add_number(o,"current_stall_samples_analyzed",estimate.analyzed);
+    add_number(o,"current_stall_samples_dropped",estimate.dropped);
+    add_number(o,"current_stall_window_ms",estimate.window_ms);
+    add_number(o,"current_stall_compute_max_us",estimate.compute_max_us);
+    add_number(o,"current_stall_ripple_rms_a",estimate.ripple_rms);
+    add_bool(o,"current_stream_enabled",current_stream_enabled);
+#endif
     add_bool(o, "stall_detection_valid", false);
     null(o, "stall_torque_count");
     null(o, "stall_suspected");
@@ -445,7 +470,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.10");
+        add_string(o, "firmware_version", "1.0.11");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -686,6 +711,14 @@ static void command(const char *line) {
             previous_mode = BRAKING;
         } else if (s.mode != STOPPED && s.mode != BRAKING)
             error = "Deceleration requires continuous motion";
+    } else if(matches(cmd,"set_current_stream_enabled")) {
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+        cJSON *enabled=cJSON_GetObjectItemCaseSensitive(c,"enabled");
+        if(!cJSON_IsBool(enabled))error="enabled must be a boolean";
+        else current_stream_enabled=cJSON_IsTrue(enabled);
+#else
+        error="Board does not support this command";
+#endif
     } else if (matches(cmd, "arm_power") || matches(cmd, "set_current_limit")) {
 #ifdef MOTOR_BOARD_DRV8452
         if (s.mode != STOPPED || restart_at)
@@ -987,6 +1020,9 @@ int main(void) {
     sample();
     gpio_set_function(BUZZER_PIN, GPIO_FUNC_PWM);
     tusb_init();
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+    stall_estimator_init(strcmp(device_id,"e66568714f117e21")==0);
+#endif
     watchdog_enable(2000, true);
     char line[513];
     size_t length = 0;
@@ -1009,6 +1045,14 @@ int main(void) {
             sample();
         motor_status_t s = motor_status();
         protect(now, s);
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+        stall_context_t context={.moving=s.enabled&&(s.mode==FINITE||s.mode==CONTINUOUS),.healthy=temperature_valid&&power_ready()&&gpio_get(23),.voltage=pd_voltage,.direction=s.direction,.factor=s.factor,.speed=s.speed,.profile_speed=s.profile_speed,.temperature=temperature};
+        stall_estimator_context(context,now);
+        uint64_t analysis_started=time_us_64();
+        current_capture_analyze();
+        stall_estimator_evaluate(time_us_64());
+        stall_estimator_compute_time((uint32_t)(time_us_64()-analysis_started));
+#endif
         if (!tud_cdc_connected()) {
             if (!connection_lost_at)
                 connection_lost_at = now;
@@ -1056,7 +1100,11 @@ int main(void) {
             last_emit = now;
         }
         if (now - last_current_emit >= 20000) {
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+            if(current_stream_enabled)stream_current();
+#else
             stream_current();
+#endif
             last_current_emit = now;
         }
         watchdog_update();

@@ -10,7 +10,7 @@ sanitize="${NATIVE_SANITIZERS:-undefined}"
   firmware-c/profile.c tests/native/test_profile.c -lm -o build/native-tests/test-profile
 "$compiler" -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -DCJSON_NESTING_LIMIT=8 -fsanitize="$sanitize" \
   -Ifirmware-c -Itests/native tests/native/test_protocol.c firmware-c/profile.c \
-  firmware-c/vendor/cJSON.c -lm -o build/native-tests/test-protocol
+  firmware-c/vendor/cJSON.c firmware-c/stall_estimator.c -lm -o build/native-tests/test-protocol
 "$compiler" -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -fsanitize="$sanitize" \
   -Ifirmware-c -Itests/native tests/native/test_settings.c -lm -o build/native-tests/test-settings
 build/native-tests/test-profile
@@ -30,3 +30,6 @@ build/native-tests/test-drv8847-protocol build/native-tests/drv8847-telemetry.js
 "$compiler" -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -DMOTOR_BOARD_DRV8847=1 -fsanitize="$sanitize" \
   -Ifirmware-c -Itests/native tests/native/test_drv8847_motor.c firmware-c/profile.c -lm -o build/native-tests/test-drv8847-motor
 build/native-tests/test-drv8847-motor
+
+"$compiler" -std=c11 -Wall -Wextra -Werror -fsanitize="$sanitize" -Ifirmware-c tests/native/test_stall_estimator.c firmware-c/stall_estimator.c -lm -o build/native-tests/test-stall-estimator
+build/native-tests/test-stall-estimator

@@ -6,6 +6,11 @@
 #include "hardware/sync.h"
 #include "pico/stdlib.h"
 #include <string.h>
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+#include "stall_estimator.h"
+static uint64_t analysis_cursor;
+void current_capture_analyze(void);
+#endif
 #define RING_WORDS 8192u
 /* Multiple of the ring size, so each DMA restart preserves channel parity. */
 #define BLOCK_WORDS 0xffffe000u
@@ -92,3 +97,13 @@ void current_capture_read(current_frame_t *f, bool connected) {
     f->dropped = dropped;
 }
 void current_capture_drop(unsigned bins) { dropped += bins * CURRENT_BIN_PAIRS; }
+
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+/* Independent of the USB export cursor. Bounded by the DMA ring, with explicit
+   data-loss reporting rather than silently scoring overwritten samples. */
+void current_capture_analyze(void) {
+    uint64_t n=pairs_written();
+    if(n-analysis_cursor>RING_WORDS/2-512){stall_estimator_gap(n-analysis_cursor);analysis_cursor=n;return;}
+    while(analysis_cursor<n){unsigned i=(analysis_cursor*2)&(RING_WORDS-1);stall_estimator_sample(ring[i],ring[i+1],started_us+analysis_cursor*10);analysis_cursor++;}
+}
+#endif
