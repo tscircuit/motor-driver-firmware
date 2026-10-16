@@ -737,6 +737,7 @@ static void command(const char *line) {
                 add_string(o,"type","stall_trace");
                 if(id)cJSON_AddItemToObject(o,"id",cJSON_Duplicate(id,true));
                 add_number(o,"offset",offset);add_number(o,"total",count);
+                add_number(o,"device_time_us",(double)time_us_64());
                 add_number(o,"sample_hz",STALL_FEATURE_HZ);
                 for(unsigned i=(unsigned)offset;i<count&&i<(unsigned)offset+16;i++) {
                     float values[4];uint64_t at;

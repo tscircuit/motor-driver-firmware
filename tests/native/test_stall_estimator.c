@@ -40,6 +40,9 @@ int main(void){
  float values[4];uint64_t at;
  assert(stall_estimator_trace_count()==0);
  assert(!stall_estimator_trace_bin(0,values,&at));
+ c.profile_speed=10;stall_estimator_context(c,now);
+ assert(!stall_estimator_active());
+ stall_estimator_context(c,now+1000);
  c.moving=false;stall_estimator_context(c,now);
  assert(stall_estimator_trace_count()==1500&&!stall_estimator_result().valid);
  assert(stall_estimator_trace_bin(1499,values,&at)&&at==now-1000);
@@ -47,7 +50,7 @@ int main(void){
  stall_estimator_context(c,now+1000);
  assert(stall_estimator_trace_count()==1500);
  assert(!stall_estimator_trace_bin(1500,values,&at));
- c.moving=true;stall_estimator_context(c,now);
+ c.moving=true;c.profile_speed=c.speed;stall_estimator_context(c,now);
  feed(free_samples,5000);c.moving=false;stall_estimator_context(c,now);
  assert(stall_estimator_trace_count()==STALL_HISTORY);
  assert(stall_estimator_trace_bin(0,values,&at)&&at==now-STALL_HISTORY*1000);
