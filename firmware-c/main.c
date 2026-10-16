@@ -67,21 +67,29 @@ static uint buzzer_pin_function;
 static bool buzzer_saw_low, buzzer_saw_high;
 static uint32_t diagnostic_pulses, diagnostic_elapsed;
 static motor_mode_t previous_mode = STOPPED;
-static stall_response_t stall_response;
+static stall_response_t stall_response, stall_beep_response;
 extern volatile bool usb_boot_requested;
 
 static void stop(const char *reason) {
     motor_stop();
     stall_response = (stall_response_t){0};
+    stall_beep_response = (stall_response_t){0};
     song_length = 0;
     snprintf(stop_reason, sizeof(stop_reason), "%s", reason);
 }
-static void respond_to_stall(uint64_t now, motor_status_t s, bool detected) {
-    stall_response_update(&stall_response, detected && s.enabled &&
-                          (s.mode == FINITE || s.mode == CONTINUOUS), now,
+static void respond_to_stall(uint64_t now, motor_status_t s, bool detected, bool stall_like) {
+    bool moving = s.enabled && (s.mode == FINITE || s.mode == CONTINUOUS);
+    stall_response_update(&stall_beep_response, stall_like && moving, now, 0);
+    stall_response_update(&stall_response, detected && moving, now,
                           settings.stall_stop_ms);
     if (stall_response.timed_out) stop("Stall auto-stop timeout");
 }
+#if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+static bool current_stall_warning(stall_result_t estimate, uint64_t now) {
+    return estimate.valid && now >= estimate.window_end_us &&
+           now - estimate.window_end_us < 250000 && estimate.score >= 65;
+}
+#endif
 static bool power_ready(void) {
 #ifdef MOTOR_BOARD_DRV8847
     return true; /* This PCB has no software motor-power selector or readback. */
@@ -167,9 +175,9 @@ static void indicators(uint64_t now, motor_status_t s) {
         buzzer((now / 1000) % 1000 < 180 ? 2731 : 0);
         return;
     }
-    if (settings.stall_beep && stall_response.active) {
+    if (settings.stall_beep && stall_beep_response.active) {
         song_length = 0;
-        buzzer(stall_response_tone(&stall_response, true, now));
+        buzzer(stall_response_tone(&stall_beep_response, true, now));
         return;
     }
     if (song_length && now >= song_until) {
@@ -406,6 +414,7 @@ static void status(bool compact) {
     add_bool(o, "stall_beeping_on", settings.stall_beep);
     add_number(o, "stall_stop_ms", settings.stall_stop_ms);
     add_bool(o, "stall_active", stall_response.active);
+    add_bool(o, "stall_beep_active", settings.stall_beep && stall_beep_response.active);
     add_number(o, "stall_elapsed_ms", stall_response.active ?
                (time_us_64() - stall_response.since_us) / 1000 : 0);
     add_string(o, "motion_mode", modes[s.mode]);
@@ -509,7 +518,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.14");
+        add_string(o, "firmware_version", "1.0.15");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -918,7 +927,10 @@ static void command(const char *line) {
             next.stall_beep = cJSON_IsTrue(beep);
             next.stall_stop_ms = (uint32_t)delay;
             if (!settings_save(&next)) error = "Settings flash write failed";
-            else stall_response = (stall_response_t){0};
+            else {
+                stall_response = (stall_response_t){0};
+                stall_beep_response = (stall_response_t){0};
+            }
         }
 #endif
     } else if (matches(cmd, "set_threshold") || matches(cmd, "set_device_name")) {
@@ -1144,18 +1156,20 @@ int main(void) {
         stall_estimator_compute_time((uint32_t)(time_us_64()-analysis_started));
 #endif
         /* Only a current, definite detection counts toward a continuous stall. */
-        bool detected = false;
+        bool detected = false, stall_like = false;
+        uint64_t response_now = time_us_64();
 #ifdef MOTOR_BOARD_DRV8452
         nema23_status_t stall_board = nema23_status();
         detected = stall_board.stall_valid && stall_board.stall_suspected;
+        stall_like = detected;
 #elif !defined(MOTOR_BOARD_DRV8847)
         stall_result_t stall_estimate = stall_estimator_result();
-        detected = stall_estimate.valid && strcmp(stall_estimate.state, "suspected") == 0 &&
-                   now >= stall_estimate.window_end_us &&
-                   now - stall_estimate.window_end_us < 250000;
+        /* An explicit audible warning is not gated by model confidence. */
+        stall_like = current_stall_warning(stall_estimate, response_now);
+        detected = stall_like && strcmp(stall_estimate.state, "suspected") == 0;
 #endif
         s = motor_status();
-        respond_to_stall(now, s, detected);
+        respond_to_stall(response_now, s, detected, stall_like);
         if (!tud_cdc_connected()) {
             if (!connection_lost_at)
                 connection_lost_at = now;

@@ -86,7 +86,7 @@ int main(void) {
     settings.stall_beep = true;
     settings.stall_stop_ms = 1000;
     check(START, true);
-    respond_to_stall(fake_us, fake_motor, true);
+    respond_to_stall(fake_us, fake_motor, true, true);
     indicators(fake_us, fake_motor);
     assert(buzzer_frequency == 1800);
     alarm = true;
@@ -94,13 +94,38 @@ int main(void) {
     assert(buzzer_frequency == 2731); /* Overheat always wins. */
     alarm = false;
     fake_us += 999999;
-    respond_to_stall(fake_us, fake_motor, true);
+    respond_to_stall(fake_us, fake_motor, true, true);
     assert(fake_motor.enabled);
     fake_us++;
-    respond_to_stall(fake_us, fake_motor, true);
+    respond_to_stall(fake_us, fake_motor, true, true);
     assert(!fake_motor.enabled && matches(stop_reason, "Stall auto-stop timeout"));
     assert(!stall_response.active);
     settings.stall_stop_ms = 0;
+    check(START, true);
+    settings.stall_stop_ms = 1000;
+    stall_result_t uncertain = {.valid = true, .state = "uncertain", .score = 90,
+                                .window_end_us = fake_us};
+    assert(current_stall_warning(uncertain, fake_us));
+    uncertain.score = 20;
+    assert(!current_stall_warning(uncertain, fake_us));
+    uncertain.score = 90;
+    assert(!current_stall_warning(uncertain, fake_us + 250000));
+    uncertain.valid = false;
+    assert(!current_stall_warning(uncertain, fake_us));
+    uncertain.valid = true;
+    respond_to_stall(fake_us, fake_motor, false, current_stall_warning(uncertain, fake_us));
+    indicators(fake_us, fake_motor);
+    assert(buzzer_frequency == 1800 && !stall_response.active);
+    fake_us += 2000000;
+    respond_to_stall(fake_us, fake_motor, false, true);
+    assert(fake_motor.enabled && stall_beep_response.active && !stall_response.timed_out);
+    settings.stall_beep = false;
+    indicators(fake_us, fake_motor);
+    assert(buzzer_frequency == 0);
+    stop("Test complete");
+    assert(!stall_beep_response.active);
+    settings.stall_stop_ms = 0;
+    command("{\"cmd\":\"heartbeat\"}");
     const char *invalid[] = {
         "[]",
         "null",
