@@ -9,7 +9,7 @@ function mount(axis){
  const panel=element('section');panel.className='stallControls';panel.append(element('h3','Stall response'));
  const beepLabel=element('label','Stall beeping on '),beep=element('input');beep.type='checkbox';beepLabel.append(beep);
  const delayLabel=element('label','Stall time until auto stop (seconds) '),delay=element('input');delay.type='number';delay.min='0';delay.max='60';delay.step='0.1';delay.value='0';delayLabel.append(delay);
- const apply=element('button','Save stall settings'),status=element('p'),note=element('p','0 seconds = off (default). Only a continuous detected stall counts; free, uncertain or unknown readings reset the timer. Three rapid, lower-pitched beeps repeat during a detected stall. Overheat alarms take priority. Settings are saved on the controller.');
+ const apply=element('button','Save stall settings'),status=element('p'),note=element('p','0 seconds = off (default). Auto stop counts only continuous definite detections; free, uncertain or unknown readings reset its timer. Beeping follows a stall-like score even when marked uncertain. Three rapid, lower-pitched beeps repeat while that score stays high. Overheat alarms take priority. Settings are saved on the controller.');
  note.className=status.className='hint';status.setAttribute('role','status');
  panel.append(beepLabel,delayLabel,apply,status,note);parent.append(panel);
  const a={panel,beep,delay,apply,status,last:null,seen:0,busy:false,dirty:false,error:null};
@@ -31,6 +31,7 @@ function render(a){
  a.beep.disabled=a.delay.disabled=a.apply.disabled=!live||!stopped||a.busy;
  if(!a.dirty){a.beep.checked=!!d.stall_beeping_on;a.delay.value=String((d.stall_stop_ms||0)/1000);}
  a.status.textContent=a.error||(!live?'Waiting for live controller status.':!stopped?'Stop the motor to change these settings.':a.busy?'Saving…':a.dirty?'Unsaved changes.':`Saved · stall beeping ${d.stall_beeping_on?'on':'off'} · auto stop ${d.stall_stop_ms?'after '+d.stall_stop_ms/1000+' seconds':'off'}.`);
+ if(live&&d.stall_beep_active)a.status.textContent+=' Stall warning beeping active.';
  if(live&&d.stall_active)a.status.textContent+=` Detected stall: ${(Number(d.stall_elapsed_ms||0)/1000).toFixed(1)} seconds.`;
 }
 const api={receive(axis,d,send){if(d.type!=='telemetry')return;let a=devices.get(axis);if(!a){if(!d.capabilities?.stall_response_supported)return;a=mount(axis);if(!a)return;devices.set(axis,a);}a.last=d.compact?{...a.last,...d}:d;a.seen=Date.now();a.send=send;render(a);},disconnect(axis){const a=devices.get(axis);if(a){a.seen=0;a.dirty=false;a.error=null;render(a);}}};

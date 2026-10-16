@@ -124,6 +124,11 @@ NEMA23 uses valid sensorless torque stall detection. Only enabled finite or
 continuous motion counts. A continuous detection lasting the configured time
 stops with `Stall auto-stop timeout`; it does not restart automatically.
 
+From 1.0.15, beeping follows a fresh valid current score >=65, including
+`uncertain` estimates. Confidence gates only auto-stop, not the audible warning.
+`stall_beep_active` reports this independent audible warning. Unknown or stale
+estimates do not beep.
+
 Stall audio is three 70 ms chirps at 1800 Hz, spaced 70 ms apart, repeating
 every 700 ms. Overheat keeps its 2731 Hz alarm and takes priority. These
 settings do not change thermal, electrical or communication protection.
