@@ -80,7 +80,7 @@ float stall_estimator_score(const float f[7],bool extrapolate,bool *outlier){
 }
 void stall_estimator_evaluate(uint64_t now){
  if(job_active){
-  feature_step(&job,job.centered?8:512);
+  feature_step(&job,job.centered?32:512);
   if(!job.centered||job.pos<job.n)return;
   job_active=false;float f[7];
   if(!feature_finish(&job,f)){result.valid=false;result.reason="Insufficient winding current";return;}
