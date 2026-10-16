@@ -134,3 +134,45 @@ every 700 ms. Overheat keeps its 2731 Hz alarm and takes priority. These
 settings do not change thermal, electrical or communication protection.
 The NEMA17 estimator remains experimental; a configured timeout follows
 its detections, not independent shaft feedback.
+
+## Sensitivity, stall-based homing and travel bounds (1.0.16)
+
+`set_stall_sensitivity` takes `sensitivity` (integer 0–100), saved on the
+controller. The current-pattern score threshold is `100 - sensitivity`;
+default 35 preserves the previous score threshold of 65. The graph and warning
+use the same threshold. NEMA23 uses its existing stall torque threshold control.
+
+`run_stall_homing` takes `speed_full_sps`, `max_travel_full_steps`, and
+`backoff_full_steps`. It seeks the negative stop, backs off, seeks the positive
+stop, backs off, and returns to zero. A candidate contact must persist for
+100 ms, and current must clear during each backoff. Every leg is a finite move
+with a travel ceiling and timeout. Unsupported boards reject it. The calibrated
+NEMA17 needs 9 V and 25, 60, or 100 full steps/sec; the default UI uses 60, a
+1000-step ceiling, and 100-step backoff. The backoff must be long enough for a
+steady-speed current window. Hard stops must tolerate this contact procedure.
+
+The usable maximum excludes the configured backoff and a conservative detector
+response allowance. These are inferred, commanded-step bounds, not encoder
+measurements. A stall elsewhere, mechanical slip or manually moving the shaft
+can invalidate the physical reference; rehome after any of these. The existing
+experimental detector has not been qualified as an independent travel-safety
+sensor. Hardware end switches are required for independent position protection.
+
+Telemetry includes `homing_active`, `homing_phase`, `homing_message`, `homed`,
+`homing_required`, `bounds_saved`, `bounds_min_full_steps`, and
+`bounds_max_full_steps`. Phases 1/3 seek, 2/4 back off, 5 returns, 6 failed,
+7 completed. Only a complete successful procedure saves a new range. Stop,
+USB/heartbeat loss, faults, no contact, no clearance, and timeout abort it.
+Homing changes `position_session`, invalidating saved-position bookmarks.
+
+Each controller enforces its own bounds in the STEP-pulse scheduler. Queued
+pulses reserve remaining travel, finite moves beyond the range are rejected,
+and continuous jog/braking is clipped at the boundary. Direct pulse tests are
+unavailable with saved bounds. Reboots preserve the range but invalidate the
+position reference; normal motion is blocked until rehomed. Homing may search
+outside the old range, but remains limited by its explicit search ceiling.
+
+The single-axis and XY pages offer **Run Stall-based Homing**. XY homes connected
+controllers sequentially, aborting the batch on a failed/disconnected axis.
+The general single-controller dashboard uses the same runner. No homing is
+automatically run by loading the page or installing firmware.

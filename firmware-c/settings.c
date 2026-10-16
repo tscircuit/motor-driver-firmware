@@ -11,7 +11,8 @@
 #include "pico/stdlib.h"
 #endif
 #define SETTINGS_BASE (2u * 1024u * 1024u - 2u * FLASH_SECTOR_SIZE)
-#define SETTINGS_MAGIC 0x4d435432u
+#define SETTINGS_MAGIC 0x4d435433u
+#define V2_SETTINGS_MAGIC 0x4d435432u
 #define LEGACY_SETTINGS_MAGIC 0x4d435431u
 #ifndef MOTOR_INITIAL_NAME
 #define MOTOR_INITIAL_NAME "Motor bench"
@@ -30,6 +31,11 @@ typedef struct {
     struct { char name[33]; float threshold; } value;
     uint32_t checksum;
 } legacy_record_t;
+typedef struct {
+    uint32_t magic, sequence;
+    struct { char name[33]; float threshold; uint32_t stall_stop_ms; bool stall_beep; } value;
+    uint32_t checksum;
+} v2_record_t;
 _Static_assert(sizeof(record_t) <= FLASH_PAGE_SIZE, "Settings record exceeds one flash page");
 settings_t settings;
 static uint32_t sequence;
@@ -56,21 +62,36 @@ bool settings_name_valid(const char *name) {
     return true;
 }
 static bool valid(const record_t *r) {
-    return r->magic == SETTINGS_MAGIC && memchr(r->value.name, 0, sizeof(r->value.name)) &&
+    return r->magic == SETTINGS_MAGIC && r->checksum == checksum(r) && memchr(r->value.name, 0, sizeof(r->value.name)) &&
            settings_name_valid(r->value.name) && isfinite(r->value.threshold) &&
            r->value.threshold >= 10 && r->value.threshold <= SHUTDOWN_C - 1 &&
-           r->value.stall_stop_ms <= 60000 &&
+           r->value.stall_stop_ms <= 60000 && r->value.stall_sensitivity <= 100 &&
+           (!r->value.bounds_saved || (r->value.travel_max > 0 && r->value.travel_max <= 1600000)) &&
            r->checksum == checksum(r);
 }
 void settings_load(void) {
     settings = (settings_t){.name = MOTOR_INITIAL_NAME, .threshold = MOTOR_INITIAL_THRESHOLD,
-                            .stall_beep = true};
+                            .stall_beep = true, .stall_sensitivity = 35};
     for (int i = 0; i < 2; ++i) {
         const record_t *r = (const record_t *)(XIP_BASE + SETTINGS_BASE + i * FLASH_SECTOR_SIZE);
         if (valid(r) && (active < 0 || (int32_t)(r->sequence - sequence) > 0)) {
             settings = r->value;
             sequence = r->sequence;
             active = i;
+        } else if (r->magic == V2_SETTINGS_MAGIC) {
+            const v2_record_t *old = (const v2_record_t *)r;
+            if (memchr(old->value.name, 0, sizeof(old->value.name)) &&
+                settings_name_valid(old->value.name) && isfinite(old->value.threshold) &&
+                old->value.threshold >= 10 && old->value.threshold <= SHUTDOWN_C-1 &&
+                old->value.stall_stop_ms <= 60000 &&
+                old->checksum == checksum_bytes(old, offsetof(v2_record_t, checksum)) &&
+                (active < 0 || (int32_t)(old->sequence-sequence)>0)) {
+                memcpy(settings.name, old->value.name, sizeof(settings.name));
+                settings.threshold=old->value.threshold; settings.stall_stop_ms=old->value.stall_stop_ms;
+                settings.stall_beep=old->value.stall_beep; settings.stall_sensitivity=35;
+                settings.bounds_saved=false; settings.travel_max=0;
+                sequence=old->sequence; active=i;
+            }
         } else if (r->magic == LEGACY_SETTINGS_MAGIC) {
             const legacy_record_t *old = (const legacy_record_t *)r;
             if (memchr(old->value.name, 0, sizeof(old->value.name)) &&
@@ -82,6 +103,7 @@ void settings_load(void) {
                 settings.threshold = old->value.threshold;
                 settings.stall_stop_ms = 0;
                 settings.stall_beep = true;
+                settings.stall_sensitivity=35; settings.bounds_saved=false; settings.travel_max=0;
                 sequence = old->sequence;
                 active = i;
             }
@@ -95,7 +117,8 @@ static void write_flash(void *unused) {
 }
 bool settings_save(const settings_t *next) {
     if (!settings_name_valid(next->name) || !isfinite(next->threshold) || next->threshold < 10 ||
-        next->threshold > SHUTDOWN_C - 1 || next->stall_stop_ms > 60000)
+        next->threshold > SHUTDOWN_C - 1 || next->stall_stop_ms > 60000 || next->stall_sensitivity > 100 ||
+        (next->bounds_saved && (next->travel_max <= 0 || next->travel_max > 1600000)))
         return false;
     record_t r = {.magic = SETTINGS_MAGIC, .sequence = sequence + 1, .value = *next};
     r.checksum = checksum(&r);

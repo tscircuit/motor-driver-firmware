@@ -38,6 +38,10 @@ int main(void) {
     assert(cJSON_IsNull(cJSON_GetObjectItem(initial, "stall_suspected")));
     assert(cJSON_IsFalse(cJSON_GetObjectItem(initial, "stall_detection_valid")));
     cJSON_Delete(initial);
+    check("{\"cmd\":\"set_stall_sensitivity\",\"sensitivity\":80}",true);
+    assert(settings.stall_sensitivity==80);
+    check("{\"cmd\":\"set_stall_sensitivity\",\"sensitivity\":101}",false);
+    check("{\"cmd\":\"set_stall_sensitivity\",\"sensitivity\":35}",true);
     check("{\"cmd\":\"set_stall_response\",\"beeping_on\":true,\"stop_ms\":1000}", true);
     assert(settings.stall_beep && settings.stall_stop_ms == 1000);
     check("{\"cmd\":\"set_stall_response\",\"beeping_on\":1,\"stop_ms\":1000}", false);

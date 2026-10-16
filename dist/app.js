@@ -8,7 +8,7 @@ const caps=()=>({...defaults,...(last?.capabilities||{})});
 let nameDirty=false,renaming=false,restartNotice=null;
 let points=[],pending=new Map(),dirty=false,writeChain=Promise.resolve();
 const message=t=>{$('message').textContent=t;};
-function controls(){hardwareControls();const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500;$('beep').disabled=!live||renaming;const songReady=live&&caps().song_supported&&!last?.motor_enabled&&!last?.alarm_active&&!last?.restarting&&!renaming&&!songBusy;$('playSong').disabled=!songReady||!loadedSong;$('demoSong').disabled=!songReady;$('stopSong').disabled=!live||!caps().song_supported;$('deviceName').disabled=!live||!last?.usb_name_supported||!!last?.motor_enabled||renaming;$('rename').disabled=$('deviceName').disabled;$('threshold').disabled=!live;$('apply').disabled=!live||!!last?.motor_enabled||renaming;for(const id of ['mode','resolution','direction','steps','speed','start'])$(id).disabled=!live||last?.protocol!==3||!!last?.motor_enabled||renaming||!!last?.restarting;$('acceleration').disabled=!live||!caps().acceleration_supported||!!last?.motor_enabled||renaming||!!last?.restarting;$('stop').disabled=!port;$('connect').disabled=connecting||renaming||closing;$('connect').textContent=port?'Disconnect':'Connect board ↗';hardwareControls();}
+function controls(){hardwareControls();const live=!!port&&lastSeen>0&&Date.now()-lastSeen<2500;$('beep').disabled=!live||renaming;const songReady=live&&caps().song_supported&&!last?.motor_enabled&&!last?.alarm_active&&!last?.restarting&&!renaming&&!songBusy;$('playSong').disabled=!songReady||!loadedSong;$('demoSong').disabled=!songReady;$('stopSong').disabled=!live||!caps().song_supported;$('deviceName').disabled=!live||!last?.usb_name_supported||!!last?.motor_enabled||renaming;$('rename').disabled=$('deviceName').disabled;$('threshold').disabled=!live;$('apply').disabled=!live||!!last?.motor_enabled||renaming;for(const id of ['mode','resolution','direction','steps','speed','start'])$(id).disabled=!live||last?.protocol!==3||!!last?.motor_enabled||renaming||!!last?.restarting||!!last?.homing_required||!!last?.homing_active;$('acceleration').disabled=!live||!caps().acceleration_supported||!!last?.motor_enabled||renaming||!!last?.restarting;$('stop').disabled=!port;$('connect').disabled=connecting||renaming||closing;$('connect').textContent=port?'Disconnect':'Connect board ↗';hardwareControls();}
 function send(cmd,fields={}){
  if(!port||!port.writable)return Promise.reject(Error('Connect the board first.'));
  const id=nextId++;
@@ -181,3 +181,11 @@ function updateHardware(){
 }
 $('applyLed').addEventListener('click',async()=>{try{await send('set_led',{color:$('ledColor').value});await send('status');message('LED color applied. Alarms take priority.');}catch(e){message(e.message);}});
 $('applyPd').addEventListener('click',async()=>{try{await send('set_pd_voltage',{voltage:Number($('pdVoltage').value)});await send('status');message(caps().power_arm_required?'Voltage requested. Use Enable motor power to connect the rail.':'Motor voltage requested. Wait two seconds for settling.');}catch(e){message(e.message);}});
+
+// Reuse the same one-axis homing procedure on the full motor dashboard.
+if(typeof HomingControls!=='undefined'){
+ const homingJog={generation:0,returning:false,async stop(reason){this.generation++;this.returning=false;if(port)await send('stop');if(reason)message(reason);}};
+ const motor={get port(){return port;},get last(){return last;},get seen(){return lastSeen;},send};
+ HomingControls.mount({Motor:motor},homingJog,message,document.querySelector('main'));
+ $('stop').addEventListener('click',()=>{homingJog.generation++;});
+}

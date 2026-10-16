@@ -36,3 +36,7 @@ build/native-tests/test-stall-estimator
 "$compiler" -std=c11 -Wall -Wextra -Werror -fsanitize="$sanitize" -Ifirmware-c \
   tests/native/test_stall_response.c -o build/native-tests/test-stall-response
 build/native-tests/test-stall-response
+"$compiler" -std=c11 -Wall -Wextra -Werror -fsanitize="$sanitize" -Ifirmware-c tests/native/test_travel_limits.c -o build/native-tests/test-travel-limits
+build/native-tests/test-travel-limits
+"$compiler" -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -DCJSON_NESTING_LIMIT=8 -fsanitize="$sanitize" -Ifirmware-c -Itests/native tests/native/test_homing.c firmware-c/profile.c firmware-c/vendor/cJSON.c firmware-c/stall_estimator.c -lm -o build/native-tests/test-homing
+build/native-tests/test-homing

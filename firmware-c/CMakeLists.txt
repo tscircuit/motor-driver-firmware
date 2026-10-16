@@ -32,7 +32,7 @@ if(MOTOR_BOARD STREQUAL "drv8825")
 endif()
 # Fingerprint the source and build configuration so live boards can be checked
 # against the actual image, without relying only on a fixed version label.
-set(BUILD_INPUTS stall_response.h stall_estimator.c stall_estimator.h stall_model.h board.h nema23.c nema23.h current_capture.c current_capture.h current_stats.c CMakeLists.txt main.c motor.c motor.h profile.c profile.h settings.c
+set(BUILD_INPUTS travel_limits.h stall_response.h stall_estimator.c stall_estimator.h stall_model.h board.h nema23.c nema23.h current_capture.c current_capture.h current_stats.c CMakeLists.txt main.c motor.c motor.h profile.c profile.h settings.c
     settings.h usb_descriptors.c tusb_config.h stepper.pio memory_guard.ld
     boards/nema17-drv8847/board.h boards/nema17-drv8847/sequence.h
     boards/nema17-drv8847/motor.c boards/nema17-drv8847/bridge.pio
@@ -53,7 +53,7 @@ target_compile_options(motorcontrol PRIVATE -Wall -Wextra -Werror -Wno-unused-pa
 target_link_libraries(motorcontrol pico_stdlib pico_rand pico_unique_id pico_multicore pico_flash hardware_pio hardware_dma hardware_i2c hardware_adc hardware_pwm hardware_flash hardware_sync hardware_watchdog tinyusb_device tinyusb_board m)
 target_link_options(motorcontrol PRIVATE "LINKER:-T,${CMAKE_CURRENT_LIST_DIR}/memory_guard.ld")
 pico_set_program_name(motorcontrol "motorcontrol-native")
-pico_set_program_version(motorcontrol "1.0.15")
+pico_set_program_version(motorcontrol "1.0.16")
 pico_enable_stdio_usb(motorcontrol 0)
 pico_enable_stdio_uart(motorcontrol 0)
 pico_add_extra_outputs(motorcontrol)

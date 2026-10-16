@@ -1,4 +1,5 @@
 #include "motor.h"
+#include "travel_limits.h"
 #include "board.h"
 #include "hardware/clocks.h"
 #include "hardware/dma.h"
@@ -18,6 +19,7 @@ static mutex_t lock;
 static motor_status_t state = {
     .mode = STOPPED, .factor = 1, .direction = 1, .speed = 40, .acceleration = 100};
 static profile_t profile;
+static travel_limits_t limits;
 static uint32_t base_count, generated, last_count, measured_count;
 static uint64_t measured_at;
 
@@ -65,6 +67,18 @@ static void halt_locked(void) {
     gpio_put(WAKE_PIN, 0);
     pause_locked();
     state.enabled = false;
+}
+bool motor_set_position(int64_t position) {
+    mutex_enter_blocking(&lock);
+    bool ok=state.mode==STOPPED;
+    if(ok) state.position_microsteps=position;
+    mutex_exit(&lock); return ok;
+}
+bool motor_set_travel_limits(bool enabled, int64_t min, int64_t max) {
+    mutex_enter_blocking(&lock);
+    bool ok=state.mode==STOPPED && (!enabled || (min<max && state.position_microsteps>=min && state.position_microsteps<=max));
+    if(ok) limits=(travel_limits_t){enabled,min,max};
+    mutex_exit(&lock); return ok;
 }
 void motor_stop(void) {
     mutex_enter_blocking(&lock);
@@ -121,6 +135,10 @@ bool motor_start(int factor, int direction, double speed, double acceleration, u
         mutex_exit(&lock);
         return false;
     }
+    uint32_t wanted=steps ? steps*(16/factor) : 1;
+    if(travel_budget(limits,state.position_microsteps,direction,0,wanted)<wanted) {
+        mutex_exit(&lock); return false;
+    }
     state.factor = factor;
     state.direction = direction;
     state.speed = speed;
@@ -142,6 +160,9 @@ bool motor_retarget(int factor, int direction, double speed, double acceleration
     double initial = profile_speed(&profile, (uint32_t)state.executed_pulses);
     bool same = factor == state.factor && direction == state.direction;
     pause_locked();
+    if(!travel_budget(limits,state.position_microsteps,direction,0,1)) {
+        halt_locked(); mutex_exit(&lock); return false;
+    }
     state.factor = factor;
     state.direction = direction;
     state.speed = speed;
@@ -192,7 +213,7 @@ bool motor_test(uint32_t pulses, double hz) {
     if (!pulses || pulses > MAX_MOVE_STEPS || !isfinite(hz) || hz < 1 || hz > MAX_PULSE_HZ)
         return false;
     mutex_enter_blocking(&lock);
-    if (state.mode != STOPPED) {
+    if (state.mode != STOPPED || limits.enabled) {
         mutex_exit(&lock);
         return false;
     }
@@ -234,12 +255,18 @@ static void core1(void) {
                     if (profile_segment(&profile, generated, &n, &delay)) {
                         if (state.target_pulses && n > state.target_pulses - generated)
                             n = state.target_pulses - generated;
+                        n=travel_budget(limits,state.position_microsteps,state.direction,
+                                        generated-state.executed_pulses,n);
+                        if(!n) {
+                            if(generated==state.executed_pulses) halt_locked();
+                            mutex_exit(&lock); sleep_us(10); continue;
+                        }
                         pio_sm_put(pio, step_sm, delay);
                         pio_sm_put(pio, step_sm, n - 1);
                         generated += n;
                         state.profile_speed =
                             ((double)PULSE_CLOCK_HZ / (delay + 34)) / (16 / state.factor);
-                        if (!state.target_pulses && generated > 1000000000u) {
+                        if (!limits.enabled && !state.target_pulses && generated > 1000000000u) {
                             profile.initial = profile.target;
                             generated = 0;
                         }

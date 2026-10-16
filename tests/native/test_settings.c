@@ -34,6 +34,12 @@ int main(void) {
     reboot();
     assert(strcmp(settings.name, "Existing motor") == 0 && settings.threshold == 63);
     assert(settings.stall_beep && settings.stall_stop_ms == 0);
+    v2_record_t v2={.magic=V2_SETTINGS_MAGIC,.sequence=13,
+        .value={.name="V2 motor",.threshold=62,.stall_stop_ms=1250,.stall_beep=false}};
+    v2.checksum=checksum_bytes(&v2,offsetof(v2_record_t,checksum));
+    memcpy(fake_flash+FLASH_SECTOR_SIZE,&v2,sizeof(v2));reboot();
+    assert(strcmp(settings.name,"V2 motor")==0 && settings.stall_stop_ms==1250 && !settings.stall_beep);
+    assert(settings.stall_sensitivity==35 && !settings.bounds_saved);
     settings_t first = {.name = "Gantry YY", .threshold = 64};
     assert(settings_save(&first));
     reboot();
@@ -62,6 +68,11 @@ int main(void) {
     second.stall_stop_ms = 60001;
     assert(!settings_save(&second));
     second.stall_stop_ms = 0;
+    second.stall_sensitivity=80;second.bounds_saved=true;second.travel_max=16000;
+    assert(settings_save(&second));reboot();
+    assert(settings.stall_sensitivity==80 && settings.bounds_saved && settings.travel_max==16000);
+    second.stall_sensitivity=101;assert(!settings_save(&second));second.stall_sensitivity=80;
+    second.travel_max=0;assert(!settings_save(&second));second.travel_max=16000;
     const char *invalid[] = {
         "", " leading", "trailing ", "123456789012345678901234567890123", "bad\nname", "bad\x7f"};
     for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i)

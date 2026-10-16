@@ -68,9 +68,27 @@ static bool buzzer_saw_low, buzzer_saw_high;
 static uint32_t diagnostic_pulses, diagnostic_elapsed;
 static motor_mode_t previous_mode = STOPPED;
 static stall_response_t stall_response, stall_beep_response;
+static bool homed, needs_homing;
+static struct {
+    bool active, clear_seen;
+    unsigned phase;
+    uint64_t deadline, candidate_at;
+    int64_t candidate_pos, upper;
+    uint32_t max_travel, backoff;
+    double speed;
+    const char *message;
+} home;
+static void homing_abort(const char *reason) {
+    if(home.active) { home.active=false; home.phase=6; home.message=reason; needs_homing=settings.bounds_saved; homed=false; }
+}
 extern volatile bool usb_boot_requested;
 
 static void stop(const char *reason) {
+    homing_abort(reason);
+    if(settings.bounds_saved && (strstr(reason,"fault") || strstr(reason,"Fault") ||
+       strstr(reason,"Thermal") || strstr(reason,"sensor") || strstr(reason,"Stall auto"))) {
+        homed=false; needs_homing=true;
+    }
     motor_stop();
     stall_response = (stall_response_t){0};
     stall_beep_response = (stall_response_t){0};
@@ -81,13 +99,13 @@ static void respond_to_stall(uint64_t now, motor_status_t s, bool detected, bool
     bool moving = s.enabled && (s.mode == FINITE || s.mode == CONTINUOUS);
     stall_response_update(&stall_beep_response, stall_like && moving, now, 0);
     stall_response_update(&stall_response, detected && moving, now,
-                          settings.stall_stop_ms);
+                          home.active ? 0 : settings.stall_stop_ms);
     if (stall_response.timed_out) stop("Stall auto-stop timeout");
 }
 #if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
 static bool current_stall_warning(stall_result_t estimate, uint64_t now) {
     return estimate.valid && now >= estimate.window_end_us &&
-           now - estimate.window_end_us < 250000 && estimate.score >= 65;
+           now - estimate.window_end_us < 250000 && estimate.score >= 100-settings.stall_sensitivity;
 }
 #endif
 static bool power_ready(void) {
@@ -301,9 +319,16 @@ static void stream_current(void) {
 static cJSON *capabilities(void) {
     cJSON *c = cJSON_CreateObject(), *r = cJSON_CreateObject();
 #ifdef MOTOR_BOARD_DRV8847
+    add_bool(c, "stall_homing_supported", false);
     add_bool(c, "stall_response_supported", false);
 #else
+    add_bool(c, "stall_homing_supported", true);
     add_bool(c, "stall_response_supported", true);
+#ifdef MOTOR_BOARD_DRV8452
+    add_bool(c, "stall_sensitivity_supported", false);
+#else
+    add_bool(c, "stall_sensitivity_supported", true);
+#endif
 #endif
 #ifdef MOTOR_BOARD_DRV8452
     add_bool(c, "torque_count_supported", true);
@@ -411,6 +436,17 @@ static void status(bool compact) {
     else
         null(o, "temperature_c");
     add_bool(o, "motor_enabled", s.enabled);
+    add_number(o, "stall_sensitivity", settings.stall_sensitivity);
+    add_number(o, "stall_score_threshold", 100-settings.stall_sensitivity);
+    add_bool(o, "homing_active", home.active);
+    add_number(o, "homing_phase", home.phase);
+    add_string(o, "homing_message", home.message ? home.message : "Not homed");
+    add_bool(o, "homed", homed);
+    add_bool(o, "homing_required", needs_homing);
+    add_bool(o, "bounds_saved", settings.bounds_saved);
+    add_number(o, "bounds_min_full_steps", 0);
+    if(settings.bounds_saved) add_number(o, "bounds_max_full_steps", settings.travel_max/16.0);
+    else null(o, "bounds_max_full_steps");
     add_bool(o, "stall_beeping_on", settings.stall_beep);
     add_number(o, "stall_stop_ms", settings.stall_stop_ms);
     add_bool(o, "stall_active", stall_response.active);
@@ -518,7 +554,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.15");
+        add_string(o, "firmware_version", "1.0.16");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -607,6 +643,8 @@ static bool recent_heartbeat(void) {
 }
 static const char *motion_command(cJSON *c, bool jog) {
     motor_status_t s = motor_status();
+    if (home.active) return "Homing in progress";
+    if (needs_homing) return "Run Stall-based Homing before motion within saved bounds";
     if (restart_at)
         return "Restart pending";
     if ((jog && (s.mode == FINITE || s.mode == PREPARED || s.mode == DIAGNOSTIC)) ||
@@ -676,6 +714,94 @@ static const char *motion_command(cJSON *c, bool jog) {
     previous_mode = defer ? PREPARED : finite ? FINITE : CONTINUOUS;
     return NULL;
 }
+#ifndef MOTOR_BOARD_DRV8847
+static bool homing_move(int direction, uint32_t full_steps, unsigned phase) {
+    home.phase=phase; home.candidate_at=0; home.clear_seen=false;
+    home.deadline=time_us_64()+(uint64_t)((full_steps/home.speed+3)*1000000);
+    if(home.deadline>time_us_64()+123000000) home.deadline=time_us_64()+123000000;
+    return motor_start(1,direction,home.speed,home.speed/.4,full_steps,true,false,false);
+}
+static void homing_fail(const char *message) { stop(message); home.message=message; }
+static const char *homing_start(cJSON *c) {
+    double speed,travel,backoff;
+    if(home.active || motor_status().mode!=STOPPED) return "Stop motor before homing";
+    if(!number(c,"speed_full_sps",&speed) || !number(c,"max_travel_full_steps",&travel) ||
+       !number(c,"backoff_full_steps",&backoff) || speed<25 || speed>100 ||
+       travel<100 || travel>MAX_MOVE_STEPS || floor(travel)!=travel ||
+       backoff<20 || backoff>1000 || floor(backoff)!=backoff || travel<=4*backoff ||
+       travel/speed>120) return "Use 25-100 full steps/sec, 20+ backoff steps, and a search within 120 seconds";
+#ifndef MOTOR_BOARD_DRV8452
+    if(strcmp(device_id,"e66568714f117e21") || pd_voltage!=9 ||
+       (speed!=25 && speed!=60 && speed!=100)) return "This NEMA17 requires its calibrated motor at 9 V and 25, 60 or 100 full steps/sec";
+#endif
+    if(backoff < ceil(speed*(.4+(speed==25?.4:.1))+5)) return "Increase backoff to allow steady-speed stall clearance";
+    sample();
+    if(!recent_heartbeat() || !power_ready() || !temperature_valid || temperature>=START_BELOW_C || driver_fault())
+        return "Homing requires live connection, motor power and healthy temperature/driver";
+#ifdef MOTOR_BOARD_DRV8452
+    const char *err=nema23_prepare_motion(); if(err) return err;
+#endif
+    if(!motor_set_travel_limits(false,0,0)) return "Could not suspend bounds for homing";
+    home.active=true; home.speed=speed; home.max_travel=(uint32_t)travel; home.backoff=(uint32_t)backoff;
+    home.message="Seeking minimum stop"; homed=false; needs_homing=true;
+    snprintf(session,sizeof(session),"%s-%08lx",device_id,(unsigned long)get_rand_32());
+    if(!homing_move(-1,home.max_travel,1)) { homing_fail("Homing motion rejected"); return home.message; }
+    previous_mode=FINITE; stop_reason[0]=0; return NULL;
+}
+static void homing_tick(uint64_t now, bool stall_like, bool valid, uint32_t window_ms) {
+    if(!home.active) return;
+    motor_status_t s=motor_status();
+    if(now>=home.deadline) { homing_fail("Homing search timed out"); return; }
+    if(home.phase==1 || home.phase==3) {
+        if(valid && stall_like) {
+            if(!home.candidate_at) { home.candidate_at=now; home.candidate_pos=s.position_microsteps; }
+            if(now-home.candidate_at>=100000) {
+                bool minimum=home.phase==1;
+                motor_stop();
+                if(minimum) {
+                    motor_set_position(-(int64_t)home.backoff*16);
+                    home.message="Backing away from minimum";
+                    if(!homing_move(1,home.backoff,2)) homing_fail("Minimum backoff rejected");
+                } else {
+                    /* Exclude both contact backoff and the detector response distance. */
+                    int64_t guard=(int64_t)ceil(home.speed*(window_ms+100)/1000.0)+5;
+                    home.upper=(home.candidate_pos/16-guard-home.backoff)*16;
+                    if(home.upper<=((int64_t)home.backoff*16) || home.upper>(int64_t)home.max_travel*16) {
+                        homing_fail("Measured travel is too short or invalid"); return;
+                    }
+                    motor_set_position(home.upper+(int64_t)home.backoff*16);
+                    home.message="Backing away from maximum";
+                    if(!homing_move(-1,home.backoff,4)) homing_fail("Maximum backoff rejected");
+                }
+                return;
+            }
+        } else home.candidate_at=0;
+        if(s.mode==STOPPED) homing_fail("No end stop detected within maximum travel");
+        return;
+    }
+    if(home.phase==2 || home.phase==4) {
+        if(valid && !stall_like) home.clear_seen=true;
+        if(s.mode!=STOPPED) return;
+        if(!home.clear_seen) { homing_fail("Stall did not clear during backoff"); return; }
+        if(home.phase==2) {
+            motor_set_position(0); home.message="Seeking maximum stop";
+            if(!homing_move(1,home.max_travel,3)) homing_fail("Maximum search rejected");
+        } else {
+            home.message="Returning to zero";
+            if(!motor_set_travel_limits(true,0,home.upper) || !homing_move(-1,(uint32_t)(home.upper/16),5))
+                homing_fail("Return to zero rejected");
+        }
+        return;
+    }
+    if(home.phase==5 && s.mode==STOPPED) {
+        if(s.position_microsteps!=0) { homing_fail("Return did not reach zero"); return; }
+        settings_t next=settings; next.bounds_saved=true; next.travel_max=home.upper;
+        if(!settings_save(&next)) { homing_fail("Could not save measured bounds"); return; }
+        home.active=false; home.phase=7; home.message="Homed; saved bounds enforced";
+        homed=true; needs_homing=false; snprintf(stop_reason,sizeof(stop_reason),"Homing complete");
+    }
+}
+#endif
 static int hex_digit(char c) {
     if (c >= '0' && c <= '9')
         return c - '0';
@@ -740,6 +866,7 @@ static void command(const char *line) {
     else if (matches(cmd, "start") || matches(cmd, "jog"))
         error = motion_command(c, matches(cmd, "jog"));
     else if (matches(cmd, "run_move")) {
+        if(home.active || needs_homing) { error="Home axis before running a prepared move"; ack(id,error); cJSON_Delete(c); return; }
         sample();
         if (!recent_heartbeat() || !temperature_valid || temperature >= START_BELOW_C ||
             driver_fault() || !power_ready()
@@ -911,6 +1038,24 @@ static void command(const char *line) {
         else
             led_selection = next;
 #endif
+    } else if (matches(cmd, "run_stall_homing")) {
+#ifdef MOTOR_BOARD_DRV8847
+        error="Stall homing is unsupported on this board";
+#else
+        error=homing_start(c);
+#endif
+    } else if (matches(cmd, "set_stall_sensitivity")) {
+        double sensitivity;
+        if(s.mode!=STOPPED || home.active) error="Stop motor before saving sensitivity";
+        else if(!number(c,"sensitivity",&sensitivity) || sensitivity<0 || sensitivity>100 || floor(sensitivity)!=sensitivity)
+            error="Sensitivity must be an integer from 0 to 100";
+        else {
+            settings_t next=settings; next.stall_sensitivity=(uint32_t)sensitivity;
+#ifdef MOTOR_BOARD_DRV8452
+            error="Use the NEMA23 stall torque threshold control";
+#endif
+            if(!error && !settings_save(&next)) error="Settings flash write failed";
+        }
     } else if (matches(cmd, "set_stall_response")) {
 #ifdef MOTOR_BOARD_DRV8847
         error = "Stall detection is not supported by this board";
@@ -1000,6 +1145,7 @@ static void command(const char *line) {
             }
         }
     } else if (matches(cmd, "test_pulses")) {
+        if(home.active || needs_homing || settings.bounds_saved) { error="Pulse test unavailable with homing/bounds"; ack(id,error); cJSON_Delete(c); return; }
 #ifdef MOTOR_BOARD_DRV8847
         error = "DRV8847 has no STEP pin; pulse test is unavailable";
 #else
@@ -1097,6 +1243,7 @@ int main(void) {
     sleep_ms(250);
     boot_us = time_us_64();
     settings_load();
+    needs_homing=settings.bounds_saved;
     pico_get_unique_board_id_string(device_id, sizeof(device_id));
     for (size_t i = 0; device_id[i]; ++i)
         if (device_id[i] >= 'A' && device_id[i] <= 'F')
@@ -1166,10 +1313,17 @@ int main(void) {
         stall_result_t stall_estimate = stall_estimator_result();
         /* An explicit audible warning is not gated by model confidence. */
         stall_like = current_stall_warning(stall_estimate, response_now);
-        detected = stall_like && strcmp(stall_estimate.state, "suspected") == 0;
+        detected = stall_like && strcmp(stall_estimate.state, "uncertain") != 0;
 #endif
         s = motor_status();
         respond_to_stall(response_now, s, detected, stall_like);
+#ifndef MOTOR_BOARD_DRV8847
+#ifdef MOTOR_BOARD_DRV8452
+        homing_tick(response_now,stall_like,nema23_status().stall_valid,100);
+#else
+        homing_tick(response_now,stall_like,stall_estimate.valid,stall_estimate.window_ms);
+#endif
+#endif
         if (!tud_cdc_connected()) {
             if (!connection_lost_at)
                 connection_lost_at = now;
@@ -1198,6 +1352,9 @@ int main(void) {
         }
         s = motor_status();
         if (previous_mode != STOPPED && s.mode == STOPPED) {
+            if(homed && settings.bounds_saved && !stop_reason[0] &&
+               (s.position_microsteps==0 || s.position_microsteps==settings.travel_max))
+                snprintf(stop_reason,sizeof(stop_reason),"Travel bound reached");
             if (!stop_reason[0])
                 snprintf(stop_reason, sizeof(stop_reason), "%s",
                          previous_mode == DIAGNOSTIC ? "Pulse test complete"
