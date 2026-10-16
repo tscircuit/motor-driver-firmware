@@ -238,21 +238,32 @@ static void stream_current(void) {
 #ifndef MOTOR_BOARD_DRV8847
     static current_frame_t frame;
     current_capture_read(&frame, tud_cdc_connected());
-    if (!frame.count)
-        return;
+#ifdef MOTOR_BOARD_DRV8452
+    const unsigned group=1;
+#else
+    const unsigned group=4;
+#endif
+    unsigned complete=frame.count/group*group;
+    if(frame.count>complete)current_capture_drop(frame.count-complete);
+    if (!complete) return;
     cJSON *o = cJSON_CreateObject(), *bins = cJSON_CreateArray();
     add_string(o, "type", "current_samples");
     add_number(o, "protocol", 3);
     add_number(o, "first_sample_us", frame.first_sample_us);
-    add_number(o, "window_us", 1000);
+    add_number(o, "window_us", 1000*group);
     add_number(o, "sample_rate_hz", CURRENT_SAMPLE_HZ);
     add_number(o, "current_volts_per_amp", CURRENT_VOLTS_PER_AMP);
     add_number(o, "samples_captured", frame.captured);
     add_number(o, "dropped_samples", frame.dropped);
-    for (unsigned i = 0; i < frame.count; ++i) {
+    for (unsigned i = 0; i < complete; i+=group) {
         int values[8];
         for (unsigned w = 0; w < 2; ++w) {
             current_stats_t s = frame.bins[i].winding[w];
+            for(unsigned j=1;j<group;j++){
+                current_stats_t next=frame.bins[i+j].winding[w];
+                if(next.count){if(!s.count||next.min<s.min)s.min=next.min;if(next.max>s.max)s.max=next.max;}
+                s.sum+=next.sum;s.count+=next.count;
+            }
             values[4 * w] = s.min;
             values[4 * w + 1] = s.max;
             values[4 * w + 2] = s.sum;

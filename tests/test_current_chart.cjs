@@ -88,3 +88,7 @@ widget.receive('Y',{type:'telemetry',driver:'DRV8825',device_id:'e66568714f117e2
 assert.equal(cards[1].descendants().find(n=>n.className==='currentStallPlot').hidden,false);
 assert.match(cards[1].descendants().find(n=>n.attributes.role==='status').textContent,/Unknown/);
 widget.reset('Y');assert.equal(cards[1].descendants().find(n=>n.className==='currentStallPlot').hidden,true);
+
+const grouped=new CurrentHistory();grouped.receive({type:'current_samples',first_sample_us:0,window_us:4000,sample_rate_hz:100000,current_volts_per_amp:1,bins:[[1000,3000,800000,400,1000,3000,800000,400],[1000,3000,800000,400,1000,3000,800000,400]]},10000);
+assert.equal(grouped.points.reduce((n,p)=>n+(p.w[0]?.count||0),0),800);
+assert(grouped.points.every(p=>p.t<=10000));
