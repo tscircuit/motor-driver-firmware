@@ -462,6 +462,10 @@ static void status(bool compact) {
     stall_result_t estimate=stall_estimator_result();
     estimate.valid=estimate.valid&&s.enabled&&(s.mode==FINITE||s.mode==CONTINUOUS);
     add_bool(o,"current_stall_valid",estimate.valid);
+    add_string(o,"current_stall_state",estimate.valid?estimate.state:"unknown");
+    add_string(o,"current_stall_model",stall_estimator_model_id());
+    add_number(o,"current_stall_window_end_us",(double)estimate.window_end_us);
+    add_number(o,"current_stall_analysis_lag_ms",estimate.computed_at_us>=estimate.window_end_us?(estimate.computed_at_us-estimate.window_end_us)/1000.0:0);
     if(estimate.valid)add_number(o,"current_stall_score",estimate.score);else null(o,"current_stall_score");
     add_bool(o,"current_stall_extrapolated",estimate.extrapolated);
     add_bool(o,"current_stall_outlier",estimate.outlier);
@@ -481,7 +485,7 @@ static void status(bool compact) {
     add_string(o, "led_color", color_name());
     if (!compact) {
         add_string(o, "firmware", "native-c-pio");
-        add_string(o, "firmware_version", "1.0.12");
+        add_string(o, "firmware_version", "1.0.13");
         add_string(o, "firmware_build", FIRMWARE_BUILD_ID);
         add_number(o, "uptime_ms", (time_us_64() - boot_us) / 1000);
         add_string(o, "device_name", settings.name);
@@ -1138,7 +1142,12 @@ int main(void) {
         }
         previous_mode = s.mode;
         indicators(now, s);
-        if (now - last_emit >= 250000) {
+        #if !defined(MOTOR_BOARD_DRV8452) && !defined(MOTOR_BOARD_DRV8847)
+        const uint64_t telemetry_interval=(s.mode==FINITE || s.mode==CONTINUOUS)?100000:250000;
+#else
+        const uint64_t telemetry_interval=250000;
+#endif
+        if (now - last_emit >= telemetry_interval) {
             status(s.mode != STOPPED && s.mode != PREPARED);
             last_emit = now;
         }

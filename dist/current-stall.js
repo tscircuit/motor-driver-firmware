@@ -102,13 +102,13 @@ class Observer{
   }
  }
  evaluate(now=Date.now()){
-  if(now-this.lastEval<250)return this.result;
+  if(now-this.lastEval<(this.state.capabilities?.current_stall_firmware_supported?50:250))return this.result;
   this.lastEval=now;const s=this.state,m=this.model;let reason=null,score=null;
   if(s.capabilities?.current_stall_firmware_supported){
    const live=this.lastTelemetry!==null&&now-this.lastTelemetry<1500;
    score=live&&s.motor_enabled&&s.current_stall_valid&&Number.isFinite(s.current_stall_score)?s.current_stall_score:null;
    reason=!live?'Waiting for firmware telemetry.':!s.motor_enabled?'Motor stopped.':s.current_stall_reason||'Collecting current samples.';
-   this.result={score,reason,firmware:true,extrapolated:!!s.current_stall_extrapolated,outlier:!!s.current_stall_outlier};
+   this.result={score,reason,firmware:true,extrapolated:!!s.current_stall_extrapolated,outlier:!!s.current_stall_outlier,state:s.current_stall_state,model:s.current_stall_model};
    this.history.push({t:now,score});this.history=this.history.filter(p=>p.t>now-10000);return this.result;
   }
   if(s.device_id!==m.device_id||s.board_id!==m.board_id)reason='No calibration for this controller.';
@@ -134,8 +134,8 @@ function mount(document){
  const canvas=document.createElement('canvas');canvas.setAttribute('role','img');canvas.setAttribute('aria-label','Experimental current-based stall pattern similarity over the last ten seconds');
  const summary=document.createElement('p');summary.setAttribute('role','status');
  panel.append(h,note,canvas,summary);const observer=new Observer();
- return {panel,observer,reset(){observer.reset();panel.hidden=true;},receive(d,now){observer.receive(d,now);panel.hidden=observer.state.driver!=='DRV8825';if(observer.state.capabilities?.current_stall_firmware_supported)note.textContent='Firmware analyzes 100,000 samples/sec per winding before USB export; waveform features use 1,000 Hz bins and USB waveform summaries use 100 Hz bins. Reports only, never stops the motor. Other voltages, speeds or directions are unvalidated extrapolations; logical microstep modes are normalized. Supported analysis range: 4–320 full steps/sec. This score is not a probability.';},draw(now){
-  if(panel.hidden)return;const result=observer.evaluate(now);summary.textContent=(result.firmware?'Firmware · ':'')+(result.score===null?'Unknown · '+result.reason:(result.score>=MODEL.threshold?'Stall-like current pattern':'Free-running-like current pattern')+' · Similarity '+result.score.toFixed(0)+'/100 · '+(result.extrapolated?'Unvalidated extrapolation':'Experimental'));
+ return {panel,observer,reset(){observer.reset();panel.hidden=true;},receive(d,now){observer.receive(d,now);panel.hidden=observer.state.driver!=='DRV8825';if(observer.state.capabilities?.current_stall_firmware_supported)note.textContent=observer.state.current_stall_model?'Firmware analyzes 100,000 samples/sec per winding using 1,000 Hz current features. Trained from 24 recordings at a 9 V request. Windows adapt to speed; low speeds, interpolated settings and unfamiliar patterns are marked uncertain. Reports only, never stops the motor. This score is not a probability.':'Firmware analyzes 100,000 samples/sec per winding before USB export. This older firmware uses the earlier calibration; other settings are unvalidated. Reports only, never stops the motor. This score is not a probability.';},draw(now){
+  if(panel.hidden)return;const result=observer.evaluate(now);summary.textContent=(result.firmware?'Firmware · ':'')+(result.score===null?'Unknown · '+result.reason:(result.state==='uncertain'?'Uncertain · '+result.reason:result.score>=MODEL.threshold?'Stall-like current pattern':'Free-running-like current pattern')+' · Similarity '+result.score.toFixed(0)+'/100 · '+(result.extrapolated?'Outside validated conditions':'Experimental'));
   const ctx=canvas.getContext('2d'),w=canvas.clientWidth||600,h=180,dpr=root.devicePixelRatio||1;canvas.width=w*dpr;canvas.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
   const left=35,right=w-12,top=12,bottom=h-25,x=t=>left+(t-now+10000)/10000*(right-left),y=v=>bottom-v/100*(bottom-top);
   ctx.font='12px system-ui';ctx.strokeStyle='#334155';ctx.fillStyle='#94a3b8';for(const v of [0,50,100]){ctx.beginPath();ctx.moveTo(left,y(v));ctx.lineTo(right,y(v));ctx.stroke();ctx.fillText(String(v),0,y(v)+4);}
