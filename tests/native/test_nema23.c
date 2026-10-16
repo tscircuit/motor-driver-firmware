@@ -245,6 +245,10 @@ int main(void) {
     fake_pins[24] = 0;
     nema23_poll(fake_us, true, 25);
     assert(!nema23_ready() && !fake_pins[0]);
+    assert(strstr(nema23_status().fault, "interlock dropped"));
+    assert(nema23_status().fault_snapshot_valid);
+    assert(!(nema23_status().fault_gpio & (1u << 24)));
+    assert(nema23_status().fault_gpio & (1u << 23));
     check("{\"cmd\":\"set_fuse_power_fault_override\",\"enabled\":false}", true);
     assert(!nema23_status().ignore_fuse_power_fault && !fake_pins[0]);
     setup();

@@ -84,3 +84,5 @@ The dashboard exposes two independent, optional current overrides for the DRV845
 - **Disable peak winding-current limit** (`set_winding_current_limit_override`, boolean `enabled`) bypasses the configured current cap by programming the board's full-scale setting, approximately 3.965 A peak. The configured current is retained for when this override is turned off. Temperature foldback and thermal shutdown remain active.
 
 Telemetry reports each override separately, `effective_current_peak_a`, the last read `driver_fault_register`, and `driver_overcurrent_reported`. `driver_fault_asserted` continues to report the raw nFAULT pin even when an OCP report is ignored. Older firmware hides unsupported controls.
+
+Fault shutdowns retain `fault_gpio_snapshot` (GPIO bitmask) and `fault_driver_register` before isolating power. Check `fault_snapshot_valid` and `fault_driver_register_valid` before interpreting them. The retained snapshot is the most recent power trip since boot; live pins after shutdown describe the isolated board, not the original trigger. GPIO24 interlock loss and GPIO23 driver nFAULT have separate stop reasons.
